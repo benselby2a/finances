@@ -32,6 +32,18 @@ const GBP_FORMAT = new Intl.NumberFormat("en-GB", {
   style: "currency",
   currency: "GBP"
 });
+const NO_OUTSTANDING_MESSAGES = [
+  "No balances due. The Manatees are floating on a watertight budget and calm waters.",
+  "All square. Manatee Towers is debt-free, buoyant, and running on an even keel.",
+  "No one owes a penny. The manatees are cruising in smooth fiscal waters with a watertight budget.",
+  "Outstanding balance: £0. The manatees are financially streamlined and steady as she goes.",
+  "Nothing to settle. Manatee finances are shipshape, tidy, and running like a well-trimmed sail.",
+  "No commitments outstanding. The manatees are in full fiscal harmony from seabed to surface.",
+  "Everything's settled. The pod is on an even keel with no loose ends to tie off.",
+  "No debts on deck. The manatees are gliding with a watertight plan and a steady course.",
+  "All clear. The household books are shipshape and calm as a glassy bay.",
+  "No balances pending. The manatees are cruising smoothly with every pound accounted for."
+];
 
 function showToast(message) {
   const toast = document.getElementById("toast");
@@ -64,6 +76,17 @@ function formatError(error) {
   if (error.details) parts.push(`details=${error.details}`);
   if (error.hint) parts.push(`hint=${error.hint}`);
   return parts.join(" | ") || JSON.stringify(error);
+}
+
+function randomNoOutstandingMessage() {
+  const idx = Math.floor(Math.random() * NO_OUTSTANDING_MESSAGES.length);
+  return NO_OUTSTANDING_MESSAGES[idx] || "All square. No settlements needed.";
+}
+
+function setSettleUpEnabled(enabled) {
+  const btn = document.getElementById("open-settlement");
+  if (!btn) return;
+  btn.disabled = !enabled;
 }
 
 function setAuthedUI(isAuthed) {
@@ -105,8 +128,8 @@ function setupModals() {
     }
     paymentModal.showModal();
   });
-  document.getElementById("open-settings").addEventListener("click", () => settingsModal.showModal());
-  document.getElementById("open-settings").addEventListener("click", async () => {
+  document.getElementById("open-settings")?.addEventListener("click", () => settingsModal.showModal());
+  document.getElementById("open-settings")?.addEventListener("click", async () => {
     await renderSyncLogs();
   });
   document.getElementById("open-settlement")?.addEventListener("click", () => {
@@ -243,6 +266,17 @@ function setupModals() {
     form?.reset();
     settlementModal?.close();
   });
+  document.getElementById("settlement-form")?.from_user_id?.addEventListener("change", () => updateSettlementDirectionPreview());
+  document.getElementById("settlement-form")?.to_user_id?.addEventListener("change", () => updateSettlementDirectionPreview());
+  document.getElementById("reverse-settlement-direction")?.addEventListener("click", () => {
+    const form = document.getElementById("settlement-form");
+    if (!form) return;
+    const from = String(form.from_user_id.value || "");
+    const to = String(form.to_user_id.value || "");
+    form.from_user_id.value = to;
+    form.to_user_id.value = from;
+    updateSettlementDirectionPreview();
+  });
 
   document.getElementById("recurring-template-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -250,15 +284,35 @@ function setupModals() {
     try {
       await saveRecurringTemplateFromForm(form);
       recurringTemplateModal?.close();
-      showToast("Recurring template updated.");
+      showToast("Recurring payment updated.");
       await loadDashboardData();
     } catch (error) {
       console.error(error);
-      showToast(`Failed to update recurring template: ${formatError(error)}`);
+      showToast(`Failed to update recurring payment: ${formatError(error)}`);
     }
   });
   document.getElementById("cancel-recurring-template")?.addEventListener("click", () => {
     recurringTemplateModal?.close();
+  });
+  document.querySelectorAll(".modal-close-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-close-dialog");
+      if (key === "payment") {
+        document.getElementById("cancel-payment")?.click();
+        return;
+      }
+      if (key === "settlement") {
+        document.getElementById("cancel-settlement")?.click();
+        return;
+      }
+      if (key === "recurring-template") {
+        document.getElementById("cancel-recurring-template")?.click();
+        return;
+      }
+      if (key === "settings") {
+        settingsModal?.close();
+      }
+    });
   });
   const recurringTemplateForm = document.getElementById("recurring-template-form");
   recurringTemplateForm?.querySelectorAll("input, select").forEach((el) => {
@@ -346,7 +400,7 @@ async function openRecurringTemplateModal(templateId) {
     .eq("id", templateId)
     .single();
   if (error) {
-    showToast(`Failed to load recurring template: ${formatError(error)}`);
+    showToast(`Failed to load recurring payment: ${formatError(error)}`);
     return;
   }
   const form = document.getElementById("recurring-template-form");
@@ -376,7 +430,7 @@ async function saveRecurringTemplateFromForm(form) {
   const startDate = String(form.start_date.value || "");
   const endDate = toIsoDateOrNull(String(form.end_date.value || ""));
   const status = String(form.status.value || "active");
-  if (!title) throw new Error("Title is required.");
+  if (!title) throw new Error("Expense is required.");
   if (!startDate) throw new Error("Start date is required.");
   const dayOfMonth = frequency === "monthly" ? new Date(`${startDate}T00:00:00Z`).getUTCDate() : null;
 
@@ -422,7 +476,7 @@ async function maybePropagateRecurringTemplateFromPaymentEdit({ title, amount, c
   const afterNext = after.status === "active" ? computeNextDueDateForTemplate(after) : null;
   const impactText = `Next scheduled payment: ${beforeNext ? toDateLabel(beforeNext) : "None"} → ${afterNext ? toDateLabel(afterNext) : "None"} | Amount: ${formatGbp(template.amount)} → ${formatGbp(amount)}`;
 
-  const ok = window.confirm(`Apply these edits to the recurring template defaults as well?\n\n${impactText}`);
+  const ok = window.confirm(`Apply these edits to the recurring payment defaults as well?\n\n${impactText}`);
   if (!ok) return;
 
   const { error: updateError } = await state.supabase
@@ -437,7 +491,7 @@ async function maybePropagateRecurringTemplateFromPaymentEdit({ title, amount, c
     })
     .eq("id", templateId);
   if (updateError) throw updateError;
-  showToast("Recurring template defaults updated from payment edit.");
+  showToast("Recurring payment defaults updated from payment edit.");
 }
 
 function toggleFxFields(currencyCode) {
@@ -485,14 +539,50 @@ function populateSettlementPartyOptions() {
   form.to_user_id.innerHTML = options;
 }
 
-function openSettlementModal(prefill = null) {
+function updateSettlementDirectionPreview() {
+  const form = document.getElementById("settlement-form");
+  const preview = document.getElementById("settlement-direction-preview");
+  if (!form || !preview) return;
+  const fromId = String(form.from_user_id.value || "");
+  const toId = String(form.to_user_id.value || "");
+  const fromName = memberNameByUserId(fromId);
+  const toName = memberNameByUserId(toId);
+  preview.textContent = `${fromName} → ${toName}`;
+}
+
+async function getTopSettlementSuggestion() {
+  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
+    p_household_id: state.householdId
+  });
+  if (error) throw error;
+  const rows = (data || []).map((r) => ({
+    name: r.display_name || memberNameByUserId(r.user_id),
+    net: Number(r.net || 0)
+  }));
+  const suggestions = buildSettlementSuggestions(rows);
+  if (!suggestions.length) return null;
+  const top = suggestions[0];
+  const from = state.members.find((m) => m.display_name === top.from);
+  const to = state.members.find((m) => m.display_name === top.to);
+  if (!from || !to) return null;
+  return {
+    fromUserId: from.user_id,
+    toUserId: to.user_id,
+    amount: top.amount,
+    text: `${top.from} owes ${top.to} ${formatGbp(top.amount)}`
+  };
+}
+
+async function openSettlementModal(prefill = null) {
   const modal = document.getElementById("settlement-modal");
   const form = document.getElementById("settlement-form");
   if (!modal || !form) return;
   populateSettlementPartyOptions();
   form.payment_date.value = toIsoDate(new Date());
   form.amount.value = "";
-  form.notes.value = "";
+  if (form.notes) form.notes.value = "";
+  const hint = document.getElementById("settlement-outstanding-hint");
+  if (hint) hint.textContent = "";
   if (prefill) {
     form.from_user_id.value = prefill.fromUserId || "";
     form.to_user_id.value = prefill.toUserId || "";
@@ -503,7 +593,19 @@ function openSettlementModal(prefill = null) {
       form.from_user_id.value = state.currentUser.id;
       form.to_user_id.value = other.user_id;
     }
+    try {
+      const suggested = await getTopSettlementSuggestion();
+      if (suggested) {
+        form.from_user_id.value = suggested.fromUserId;
+        form.to_user_id.value = suggested.toUserId;
+        form.amount.value = Number(suggested.amount || 0).toFixed(2);
+        if (hint) hint.textContent = `Outstanding: ${suggested.text}`;
+      }
+    } catch (error) {
+      console.error("Failed to prefill settlement suggestion:", error);
+    }
   }
+  updateSettlementDirectionPreview();
   modal.showModal();
 }
 
@@ -692,21 +794,31 @@ async function fetchSummaryCountsSince(lastOpenedAtIso) {
   const { data, error } = await state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("source_type")
+    .select("source_type, title, payment_date")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
-    .gt("created_at", lastOpenedAtIso);
+    .gt("created_at", lastOpenedAtIso)
+    .order("created_at", { ascending: false })
+    .limit(300);
 
   if (error) throw error;
 
   let oneOffCount = 0;
   let recurringCount = 0;
+  const oneOffTitles = [];
+  const recurringTitles = [];
   for (const row of data || []) {
-    if (row.source_type === "one_off") oneOffCount += 1;
-    if (row.source_type === "recurring_generated") recurringCount += 1;
+    if (row.source_type === "one_off") {
+      oneOffCount += 1;
+      if (row.title) oneOffTitles.push(String(row.title));
+    }
+    if (row.source_type === "recurring_generated") {
+      recurringCount += 1;
+      if (row.title) recurringTitles.push(String(row.title));
+    }
   }
 
-  return { oneOffCount, recurringCount };
+  return { oneOffCount, recurringCount, oneOffTitles, recurringTitles };
 }
 
 async function processRecurringPayments() {
@@ -862,6 +974,124 @@ async function processRecurringPayments() {
   return { ranAt, generated, failed };
 }
 
+function computeUpcomingDueDates(template, fromDate, toDate) {
+  const dates = [];
+  const start = new Date(`${template.start_date}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return dates;
+  const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
+  const fromUtc = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()));
+  const toUtc = new Date(Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()));
+
+  if (template.frequency === "annual") {
+    let year = fromUtc.getUTCFullYear();
+    while (year <= toUtc.getUTCFullYear()) {
+      const d = new Date(Date.UTC(year, start.getUTCMonth(), start.getUTCDate()));
+      if (d >= fromUtc && d <= toUtc && d >= start && (!end || d <= end)) {
+        dates.push(d);
+      }
+      year += 1;
+    }
+    return dates;
+  }
+
+  const day = Number(template.day_of_month || start.getUTCDate());
+  let cursor = new Date(Date.UTC(fromUtc.getUTCFullYear(), fromUtc.getUTCMonth(), 1));
+  while (cursor <= toUtc) {
+    const year = cursor.getUTCFullYear();
+    const month = cursor.getUTCMonth();
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const date = new Date(Date.UTC(year, month, Math.min(day, lastDay)));
+    if (date >= fromUtc && date <= toUtc && date >= start && (!end || date <= end)) {
+      dates.push(date);
+    }
+    cursor = new Date(Date.UTC(year, month + 1, 1));
+  }
+  return dates;
+}
+
+async function renderHypotheticalUpcoming() {
+  const { data, error } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_templates")
+    .select("id, title, amount, frequency, day_of_month, start_date, end_date, status")
+    .eq("household_id", state.householdId)
+    .eq("status", "active")
+    .limit(500);
+  if (error) throw error;
+
+  const today = new Date();
+  const horizon = new Date(today);
+  horizon.setUTCDate(horizon.getUTCDate() + 30);
+
+  const items = [];
+  const templateIds = (data || []).map((t) => t.id);
+  const { data: contribData, error: contribError } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_template_contributions")
+    .select("recurring_template_id, user_id, mode, value")
+    .in("recurring_template_id", templateIds.length ? templateIds : ["00000000-0000-0000-0000-000000000000"]);
+  if (contribError) throw contribError;
+  const contribByTemplate = new Map();
+  for (const row of contribData || []) {
+    if (!contribByTemplate.has(row.recurring_template_id)) contribByTemplate.set(row.recurring_template_id, []);
+    contribByTemplate.get(row.recurring_template_id).push(row);
+  }
+  for (const t of data || []) {
+    const dueDates = computeUpcomingDueDates(t, today, horizon);
+    const templateContrib = (contribByTemplate.get(t.id) || []).slice().sort((a, b) => Number(b.value || 0) - Number(a.value || 0));
+    const primaryPayerId = templateContrib[0]?.user_id || t.created_by || null;
+    const primaryPayerName = primaryPayerId ? memberNameByUserId(primaryPayerId) : "Unknown";
+    for (const d of dueDates) {
+      items.push({
+        templateId: t.id,
+        dueDate: d.toISOString().slice(0, 10),
+        title: t.title,
+        amount: Number(t.amount || 0),
+        frequency: t.frequency,
+        payerUserId: primaryPayerId,
+        payerName: primaryPayerName
+      });
+    }
+  }
+
+  if (items.length) {
+    const templateIds = Array.from(new Set(items.map((i) => i.templateId)));
+    const fromIso = today.toISOString().slice(0, 10);
+    const toIso = horizon.toISOString().slice(0, 10);
+    const { data: realized, error: realizedError } = await state.supabase
+      .schema("finance_app")
+      .from("payments")
+      .select("generated_by_recurring_template_id, due_date_for_generation")
+      .in("generated_by_recurring_template_id", templateIds)
+      .gte("due_date_for_generation", fromIso)
+      .lte("due_date_for_generation", toIso)
+      .is("deleted_at", null);
+    if (realizedError) throw realizedError;
+    const realizedSet = new Set(
+      (realized || [])
+        .filter((r) => r.generated_by_recurring_template_id && r.due_date_for_generation)
+        .map((r) => `${r.generated_by_recurring_template_id}::${r.due_date_for_generation}`)
+    );
+    const filtered = items.filter((i) => !realizedSet.has(`${i.templateId}::${i.dueDate}`));
+    items.length = 0;
+    items.push(...filtered);
+  }
+
+  items.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title));
+  return items.slice(0, 100).map((r, idx) => ({
+    id: `hypo-${r.dueDate}-${idx}-${r.title}`,
+    payment_date: r.dueDate,
+    title: r.title,
+    amount_gbp: r.amount,
+    category_key: "recurring",
+    source_type: "recurring_generated",
+    created_by: r.payerUserId,
+    hypothetical_payer_name: r.payerName,
+    generated_by_recurring_template_id: null,
+    is_hypothetical: true
+  }));
+}
+
 function computeDueDates(template, today) {
   const dates = [];
   const start = new Date(`${template.start_date}T00:00:00Z`);
@@ -979,10 +1209,10 @@ function categoryIcon(categoryKey) {
 
 function typeIcon(sourceType) {
   const map = {
-    one_off: "•",
-    recurring_generated: "🔁",
-    recurring_initial: "🔁",
-    settlement: "💷"
+    one_off: "💳",
+    recurring_generated: "♻️",
+    recurring_initial: "♻️",
+    settlement: "💸"
   };
   return map[String(sourceType || "").toLowerCase()] || "•";
 }
@@ -1512,10 +1742,16 @@ async function loadDashboardData() {
   }
 
   try {
-    renderPayments(payments, new Map());
+    let hypotheticalRows = [];
+    try {
+      hypotheticalRows = await renderHypotheticalUpcoming();
+    } catch (error) {
+      console.error("Failed to load hypothetical rows:", error);
+    }
+    renderPayments(payments, new Map(), new Map(), hypotheticalRows);
     try {
       const { payerLabels, paymentDetails } = await buildPaymentMeta(payments);
-      renderPayments(payments, payerLabels, paymentDetails);
+      renderPayments(payments, payerLabels, paymentDetails, hypotheticalRows);
     } catch (error) {
       console.error("Failed to load payment meta:", error);
     }
@@ -1540,10 +1776,8 @@ async function loadDashboardData() {
     }
   }
   renderRecurringPlaceholder();
-  renderRemindersPlaceholder();
   await renderSummaryStats(payments, balanceContext);
   await renderRecurringSection();
-  await renderRemindersSection();
   await renderSyncLogs();
   await loadTitleCategoryIndex();
   updateLoadMoreButton();
@@ -1593,6 +1827,22 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     state.paymentsOffset = rows.length;
   }
   return rows;
+}
+
+async function fetchLoadedPayments() {
+  const loaded = Math.max(0, state.paymentsOffset);
+  if (!loaded) return [];
+  const { data, error } = await state.supabase
+    .schema("finance_app")
+    .from("payments")
+    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
+    .eq("household_id", state.householdId)
+    .is("deleted_at", null)
+    .order("payment_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .range(0, loaded - 1);
+  if (error) throw error;
+  return data || [];
 }
 
 function updateLoadMoreButton() {
@@ -1696,36 +1946,53 @@ async function buildPaymentMeta(payments) {
   return { payerLabels: labels, paymentDetails };
 }
 
-function renderPayments(payments, payerLabels, paymentDetails = new Map()) {
+function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypotheticalRows = []) {
   const target = document.getElementById("payments-list");
-  if (!payments.length) {
+  const combined = [...(hypotheticalRows || []), ...(payments || [])];
+  if (!combined.length) {
     target.textContent = "No payments yet.";
     return;
   }
 
-  const rows = payments
+  const rows = combined
     .slice(0, 200)
     .map((p) => {
-      const payer = payerLabels?.get(p.id) || memberNameByUserId(p.created_by);
+      const isSettlement = p.source_type === "settlement";
+      const payer = p.is_hypothetical
+        ? (p.hypothetical_payer_name || memberNameByUserId(p.created_by) || "—")
+        : (payerLabels?.get(p.id) || memberNameByUserId(p.created_by));
       const detail = paymentDetails?.get(p.id) || null;
       const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
       const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
       const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
-      return `<tr>
+      const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
+      const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Hypothetical from recurring payment</div>` : ""}
+          ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
+          ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
+          ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
+          ${!isSettlement && detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}`;
+      const hasSubtitleDetails = subtitleHtml.replace(/\s/g, "").length > 0;
+      const rowClassWithDetails = `${rowClass}${hasSubtitleDetails ? "" : " no-mobile-details"}`;
+      return `<tr class="${rowClassWithDetails}">
         <td data-label="Date">${toDateLabel(p.payment_date)}</td>
-        <td data-label="Title">
-          <div class="payment-title">${escapeHtml(p.title)}</div>
-          ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
-          ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
-          ${detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}
+        <td data-label="Expense">
+          <div class="payment-title" style="display:flex; align-items:center; gap:8px">
+            ${isSettlement ? "" : `<span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span>`}
+            <span>${escapeHtml(p.title)}</span>
+          </div>
+          <div class="payment-subtitle-desktop">${subtitleHtml}</div>
         </td>
-        <td data-label="Category"><span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span></td>
         <td data-label="Type"><span class="pill" title="${escapeHtml(typeLabel)}" aria-label="${escapeHtml(typeLabel)}">${typeIcon(typeLabel)}</span></td>
         <td data-label="Payer">${escapeHtml(payer)}</td>
         <td data-label="Amount" style="text-align:right"><strong>${formatGbp(p.amount_gbp)}</strong></td>
+        <td data-label="Details" class="payment-details-mobile${isSettlement ? " no-details" : ""}">${subtitleHtml}</td>
         <td data-label="Actions" style="text-align:right; white-space:nowrap">
-          <button type="button" data-action="edit" data-payment-id="${p.id}" style="margin-right:6px">Edit</button>
-          <button type="button" data-action="delete" data-payment-id="${p.id}">Delete</button>
+          ${p.is_hypothetical
+            ? `<span style="color:#6b7280; font-size:12px">Projected</span>`
+            : (isSettlement
+              ? `<button type="button" data-action="delete" data-payment-id="${p.id}">Delete</button>`
+              : `<button type="button" data-action="edit" data-payment-id="${p.id}" style="margin-right:6px">Edit</button>
+          <button type="button" data-action="delete" data-payment-id="${p.id}">Delete</button>`)}
         </td>
       </tr>`;
     })
@@ -1737,8 +2004,7 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map()) {
         <thead>
           <tr>
             <th style="text-align:left">Date</th>
-            <th style="text-align:left">Title</th>
-            <th style="text-align:left">Category</th>
+            <th style="text-align:left">Expense</th>
             <th style="text-align:left">Type</th>
             <th style="text-align:left">Payer</th>
             <th style="text-align:right">Amount (GBP)</th>
@@ -1780,7 +2046,7 @@ async function openEditPaymentModal(paymentId) {
   form.fx_rate_date.value = data.fx_rate_date || "";
   form.category_key.value = data.category_key || "other";
   state.categoryManuallySet = true;
-  form.notes.value = data.notes || "";
+  if (form.notes) form.notes.value = data.notes || "";
   const { data: contribRows } = await state.supabase
     .schema("finance_app")
     .from("payment_contributions")
@@ -1806,7 +2072,7 @@ async function openEditPaymentModal(paymentId) {
 }
 
 async function deletePayment(paymentId) {
-  if (!window.confirm("Delete this payment? It will be hidden from all views.")) return;
+  if (!window.confirm("Delete this payment?")) return;
   const { error } = await state.supabase
     .schema("finance_app")
     .from("payments")
@@ -1922,7 +2188,7 @@ function buildSettlementSuggestions(rows) {
 }
 
 function renderRecurringPlaceholder() {
-  document.getElementById("recurring-list").textContent = "Recurring templates loading next step.";
+  document.getElementById("recurring-list").textContent = "Recurring payments loading next step.";
 }
 
 function renderRemindersPlaceholder() {
@@ -1947,7 +2213,7 @@ async function renderRecurringSection() {
 
   const rows = data || [];
   if (!rows.length) {
-    target.textContent = "No recurring templates yet.";
+    target.textContent = "No recurring payments yet.";
     return;
   }
 
@@ -1982,9 +2248,9 @@ async function renderRecurringSection() {
         showToast(`Failed to update recurring: ${formatError(updateError)}`);
         return;
       }
-      showToast(`Recurring template ${nextStatus}.`);
-      await renderRecurringSection();
-      await renderRemindersSection();
+      showToast(`Recurring payment ${nextStatus}.`);
+      await loadDashboardData();
+      await renderSyncLogs();
     });
   });
   target.querySelectorAll("button[data-action='edit-recurring']").forEach((btn) => {
@@ -1994,7 +2260,7 @@ async function renderRecurringSection() {
     btn.addEventListener("click", async () => {
       const templateId = btn.getAttribute("data-template-id");
       if (!templateId) return;
-      const ok = window.confirm("Delete this recurring template completely?");
+      const ok = window.confirm("Delete this recurring payment completely?");
       if (!ok) return;
 
       const { error: delContribError } = await state.supabase
@@ -2050,9 +2316,8 @@ async function renderRecurringSection() {
         return;
       }
 
-      showToast("Recurring template deleted.");
-      await renderRecurringSection();
-      await renderRemindersSection();
+      showToast("Recurring payment deleted.");
+      await loadDashboardData();
       await renderSyncLogs();
     });
   });
@@ -2195,9 +2460,11 @@ async function renderSummaryStats(payments, balanceContext) {
   }
 
   if (!suggestions.length) {
-    owesSummary.textContent = "All square. No settlements needed.";
+    setSettleUpEnabled(false);
+    owesSummary.textContent = randomNoOutstandingMessage();
     return;
   }
+  setSettleUpEnabled(true);
   owesSummary.innerHTML = suggestions
     .slice(0, 3)
     .map((s) => `<div style="padding:4px 0">${escapeHtml(s.from)} <span aria-hidden="true">→</span> ${escapeHtml(s.to)}: <strong>${formatGbp(s.amount)}</strong></div>`)
@@ -2369,7 +2636,7 @@ async function savePaymentFromForm(form) {
   const fxRateToGbp = currencyCode === "GBP" ? 1 : Number(fxRateRaw || 0);
   const fxRateDate = String(formData.get("fx_rate_date") || "") || new Date().toISOString().slice(0, 10);
 
-  if (!title) throw new Error("Title is required");
+  if (!title) throw new Error("Expense is required");
   if (!paymentDate) throw new Error("Payment date is required");
   if (currencyCode !== "GBP" && (!Number.isFinite(fxRateToGbp) || fxRateToGbp <= 0)) {
     throw new Error("FX rate to GBP is required for non-GBP payments");
@@ -2640,12 +2907,17 @@ async function runStartupSummary() {
   const parts = [];
   if (counts.oneOffCount > 0) parts.push(`${counts.oneOffCount} one-off payment${counts.oneOffCount === 1 ? "" : "s"} added`);
   if (counts.recurringCount > 0) parts.push(`${counts.recurringCount} recurring payment${counts.recurringCount === 1 ? "" : "s"} processed`);
+  const oneOffList = Array.from(new Set(counts.oneOffTitles || [])).slice(0, 5);
+  const recurringList = Array.from(new Set(counts.recurringTitles || [])).slice(0, 5);
 
   const windowKey = lastOpenedAt;
   const alreadyShown = localStorage.getItem(STORAGE_KEYS.lastSummaryWindow) === windowKey;
 
   if (parts.length > 0 && !alreadyShown) {
-    showToast(`Since last open: ${parts.join(", ")}.`);
+    const listParts = [];
+    if (oneOffList.length) listParts.push(`New one-offs: ${oneOffList.join(", ")}${counts.oneOffCount > oneOffList.length ? ", ..." : ""}`);
+    if (recurringList.length) listParts.push(`Recurring processed: ${recurringList.join(", ")}${counts.recurringCount > recurringList.length ? ", ..." : ""}`);
+    showToast(`Since last open: ${parts.join(", ")}.${listParts.length ? ` ${listParts.join(" | ")}` : ""}`);
     localStorage.setItem(STORAGE_KEYS.lastSummaryWindow, windowKey);
   }
 
@@ -2718,55 +2990,20 @@ async function bootstrap() {
   document.getElementById("load-more-payments")?.addEventListener("click", async () => {
     try {
       const more = await fetchPaymentsPage({ reset: false });
-      const list = document.getElementById("payments-list");
       if (!more.length) {
         state.paymentsHasMore = false;
         updateLoadMoreButton();
         return;
       }
-      const existingRows = Array.from(list.querySelectorAll("tbody tr")).map((tr) => tr.outerHTML).join("");
-      const { payerLabels, paymentDetails } = await buildPaymentMeta(more);
-      const newRows = more
-        .map((p) => {
-          const payer = payerLabels?.get(p.id) || memberNameByUserId(p.created_by);
-          const detail = paymentDetails?.get(p.id) || null;
-          const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
-          const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
-          const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
-          return `<tr>
-            <td data-label="Date">${toDateLabel(p.payment_date)}</td>
-            <td data-label="Title">
-              <div class="payment-title">${escapeHtml(p.title)}</div>
-              ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
-              ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
-              ${detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}
-            </td>
-            <td data-label="Category"><span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span></td>
-            <td data-label="Type"><span class="pill" title="${escapeHtml(typeLabel)}" aria-label="${escapeHtml(typeLabel)}">${typeIcon(typeLabel)}</span></td>
-            <td data-label="Payer">${escapeHtml(payer)}</td>
-            <td data-label="Amount" style="text-align:right"><strong>${formatGbp(p.amount_gbp)}</strong></td>
-          </tr>`;
-        })
-        .join("");
-      if (existingRows) {
-        list.innerHTML = `
-          <div class="payments-table-wrap">
-            <table class="payments-table">
-              <thead>
-                <tr>
-                  <th style="text-align:left">Date</th>
-                  <th style="text-align:left">Title</th>
-                  <th style="text-align:left">Category</th>
-                  <th style="text-align:left">Type</th>
-                  <th style="text-align:left">Payer</th>
-                  <th style="text-align:right">Amount (GBP)</th>
-                </tr>
-              </thead>
-              <tbody>${existingRows}${newRows}</tbody>
-            </table>
-          </div>
-        `;
+      const loadedPayments = await fetchLoadedPayments();
+      let hypotheticalRows = [];
+      try {
+        hypotheticalRows = await renderHypotheticalUpcoming();
+      } catch (error) {
+        console.error("Failed to load hypothetical rows:", error);
       }
+      const { payerLabels, paymentDetails } = await buildPaymentMeta(loadedPayments);
+      renderPayments(loadedPayments, payerLabels, paymentDetails, hypotheticalRows);
       updateLoadMoreButton();
     } catch (error) {
       console.error(error);
