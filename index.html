@@ -99,16 +99,11 @@
             Enter amount and payer split to see net effect.
           </div>
         </fieldset>
-        <div class="quick-date-row">
-          <button type="button" class="chip" data-quick-date="today">Today</button>
-          <button type="button" class="chip" data-quick-date="yesterday">Yesterday</button>
-          <button type="button" class="chip" data-quick-date="month-start">Month start</button>
-        </div>
         <div class="two-col">
           <label>Date <input name="payment_date" type="date" required /></label>
           <label>Category
             <select name="category_key" id="category-select">
-              <option value="other">Other</option>
+              <option value="other">📄 Other</option>
             </select>
           </label>
         </div>
@@ -120,9 +115,17 @@
         </label>
         <label>Notes <textarea name="notes"></textarea></label>
 
-        <label class="inline">
-          <input id="is-recurring" name="is_recurring" type="checkbox" /> Make recurring
-        </label>
+        <fieldset class="kind-toggle">
+          <legend>Payment type</legend>
+          <label class="kind-option">
+            <input type="radio" name="payment_kind" value="one_off" checked />
+            <span>• One-off</span>
+          </label>
+          <label class="kind-option">
+            <input type="radio" name="payment_kind" value="recurring" />
+            <span>🔁 Recurring</span>
+          </label>
+        </fieldset>
 
         <fieldset id="recurring-fields" class="hidden">
           <label>Frequency
