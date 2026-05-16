@@ -77,12 +77,16 @@ function setupAccordion() {
     const key = section.dataset.section;
     const content = section.querySelector(".accordion-content");
     const toggle = section.querySelector(".accordion-toggle");
+    const label = toggle.textContent || "";
+    toggle.innerHTML = `<span>${escapeHtml(label)}</span><span class="accordion-indicator" aria-hidden="true">▾</span>`;
     const saved = localStorage.getItem(`finance.section.${key}`);
     const open = saved === null ? index === 0 : saved === "open";
     content.classList.toggle("hidden", !open);
+    toggle.classList.toggle("is-open", open);
     toggle.addEventListener("click", () => {
       const nowOpen = content.classList.contains("hidden");
       content.classList.toggle("hidden", !nowOpen);
+      toggle.classList.toggle("is-open", nowOpen);
       localStorage.setItem(`finance.section.${key}`, nowOpen ? "open" : "closed");
     });
   });
@@ -109,7 +113,7 @@ function setupModals() {
     openSettlementModal();
   });
 
-  const recurringToggle = document.getElementById("is-recurring");
+  const recurringToggleInputs = Array.from(document.querySelectorAll("#payment-form input[name='payment_kind']"));
   const recurringFields = document.getElementById("recurring-fields");
   const currencySelect = document.querySelector("#payment-form select[name='currency_code']");
   const titleInput = document.querySelector("#payment-form input[name='title']");
@@ -117,12 +121,13 @@ function setupModals() {
   const categorySelect = document.getElementById("category-select");
   const quickDateButtons = document.querySelectorAll("[data-quick-date]");
   const advancedOwesMode = document.getElementById("advanced-owes-mode");
-  recurringToggle.addEventListener("change", () => {
-    recurringFields.classList.toggle("hidden", !recurringToggle.checked);
-    if (recurringToggle.checked && !state.editingPaymentId) {
-      setDefaultRecurringDates();
-    }
-  });
+  const syncRecurringFieldsVisibility = () => {
+    const kind = document.querySelector("#payment-form input[name='payment_kind']:checked")?.value || "one_off";
+    const isRecurring = kind === "recurring";
+    recurringFields.classList.toggle("hidden", !isRecurring);
+    if (isRecurring && !state.editingPaymentId) setDefaultRecurringDates();
+  };
+  recurringToggleInputs.forEach((input) => input.addEventListener("change", syncRecurringFieldsVisibility));
   currencySelect?.addEventListener("change", () => {
     toggleFxFields(currencySelect.value);
   });
@@ -161,6 +166,7 @@ function setupModals() {
     });
   });
   toggleFxFields(currencySelect?.value || "GBP");
+  syncRecurringFieldsVisibility();
 
   document.getElementById("payment-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -170,6 +176,9 @@ function setupModals() {
       showToast(state.editingPaymentId ? "Payment updated." : "Payment saved.");
       paymentModal.close();
       formEl?.reset();
+      const oneOffRadio = document.querySelector("#payment-form input[name='payment_kind'][value='one_off']");
+      if (oneOffRadio) oneOffRadio.checked = true;
+      syncRecurringFieldsVisibility();
       document.getElementById("recurring-fields").classList.add("hidden");
       toggleFxFields("GBP");
       state.editingPaymentId = null;
@@ -189,6 +198,9 @@ function setupModals() {
   document.getElementById("cancel-payment")?.addEventListener("click", () => {
     const form = document.getElementById("payment-form");
     form?.reset();
+    const oneOffRadio = document.querySelector("#payment-form input[name='payment_kind'][value='one_off']");
+    if (oneOffRadio) oneOffRadio.checked = true;
+    syncRecurringFieldsVisibility();
     document.getElementById("recurring-fields")?.classList.add("hidden");
     toggleFxFields("GBP");
     state.editingPaymentId = null;
@@ -948,6 +960,39 @@ function formatGbp(value) {
   return GBP_FORMAT.format(Number(value || 0));
 }
 
+function categoryIcon(categoryKey) {
+  const map = {
+    household_bills: "🏠",
+    travel: "✈️",
+    insurance: "🛡️",
+    mortgage_rent: "🏡",
+    utilities: "🔌",
+    internet_phone: "📶",
+    groceries: "🛒",
+    transport: "🚗",
+    settlements: "💷",
+    recurring: "🔁",
+    other: "📄"
+  };
+  return map[String(categoryKey || "").toLowerCase()] || "📄";
+}
+
+function typeIcon(sourceType) {
+  const map = {
+    one_off: "•",
+    recurring_generated: "🔁",
+    recurring_initial: "🔁",
+    settlement: "💷"
+  };
+  return map[String(sourceType || "").toLowerCase()] || "•";
+}
+
+function categoryOptionLabel(key, fallbackLabel) {
+  const icon = categoryIcon(key);
+  const label = fallbackLabel || key || "Other";
+  return `${icon} ${label}`;
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replaceAll("&", "&amp;")
@@ -1075,13 +1120,13 @@ async function loadCategoryOptions() {
     });
 
   select.innerHTML = ordered
-    .map((c) => `<option value="${escapeHtml(c.key)}">${escapeHtml(c.label)}</option>`)
+    .map((c) => `<option value="${escapeHtml(c.key)}">${escapeHtml(categoryOptionLabel(c.key, c.label))}</option>`)
     .join("");
 
   if (!ordered.some((c) => c.key === "other")) {
     const option = document.createElement("option");
     option.value = "other";
-    option.textContent = "Other";
+    option.textContent = categoryOptionLabel("other", "Other");
     select.appendChild(option);
   }
 }
@@ -1667,18 +1712,18 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map()) {
       const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
       const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
       return `<tr>
-        <td>${toDateLabel(p.payment_date)}</td>
-        <td>
-          <div>${escapeHtml(p.title)}</div>
-          ${detail ? `<div style="font-size:12px; color:#6b7280; margin-top:2px">${escapeHtml(detail.paidLine)}</div>` : ""}
-          ${detail ? `<div style="font-size:12px; color:#6b7280">${escapeHtml(detail.splitLine)}</div>` : ""}
-          ${detail ? `<div style="font-size:12px; color:#4b5563"><strong>${escapeHtml(detail.resultLine)}</strong></div>` : ""}
+        <td data-label="Date">${toDateLabel(p.payment_date)}</td>
+        <td data-label="Title">
+          <div class="payment-title">${escapeHtml(p.title)}</div>
+          ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
+          ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
+          ${detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}
         </td>
-        <td>${escapeHtml(categoryLabel)}</td>
-        <td>${escapeHtml(typeLabel)}</td>
-        <td>${escapeHtml(payer)}</td>
-        <td style="text-align:right">${formatGbp(p.amount_gbp)}</td>
-        <td style="text-align:right; white-space:nowrap">
+        <td data-label="Category"><span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span></td>
+        <td data-label="Type"><span class="pill" title="${escapeHtml(typeLabel)}" aria-label="${escapeHtml(typeLabel)}">${typeIcon(typeLabel)}</span></td>
+        <td data-label="Payer">${escapeHtml(payer)}</td>
+        <td data-label="Amount" style="text-align:right"><strong>${formatGbp(p.amount_gbp)}</strong></td>
+        <td data-label="Actions" style="text-align:right; white-space:nowrap">
           <button type="button" data-action="edit" data-payment-id="${p.id}" style="margin-right:6px">Edit</button>
           <button type="button" data-action="delete" data-payment-id="${p.id}">Delete</button>
         </td>
@@ -1687,8 +1732,8 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map()) {
     .join("");
 
   target.innerHTML = `
-    <div style="overflow:auto">
-      <table style="width:100%; border-collapse:collapse">
+    <div class="payments-table-wrap">
+      <table class="payments-table">
         <thead>
           <tr>
             <th style="text-align:left">Date</th>
@@ -1747,7 +1792,8 @@ async function openEditPaymentModal(paymentId) {
     percentage: (Number(r.amount || 0) / total) * 100
   }));
   renderPaidByRows(prefill);
-  form.is_recurring.checked = false;
+  const oneOffRadio = document.querySelector("#payment-form input[name='payment_kind'][value='one_off']");
+  if (oneOffRadio) oneOffRadio.checked = true;
   document.getElementById("recurring-fields").classList.add("hidden");
   state.editingPaymentId = paymentId;
   state.editingPaymentMeta = {
@@ -2318,7 +2364,7 @@ async function savePaymentFromForm(form) {
   const paymentDate = String(formData.get("payment_date") || "");
   const categoryKey = String(formData.get("category_key") || "").trim() || null;
   const notes = String(formData.get("notes") || "").trim() || null;
-  const isRecurring = formData.get("is_recurring") === "on";
+  const isRecurring = String(formData.get("payment_kind") || "one_off") === "recurring";
   const fxRateRaw = formData.get("fx_rate_to_gbp");
   const fxRateToGbp = currencyCode === "GBP" ? 1 : Number(fxRateRaw || 0);
   const fxRateDate = String(formData.get("fx_rate_date") || "") || new Date().toISOString().slice(0, 10);
@@ -2688,24 +2734,24 @@ async function bootstrap() {
           const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
           const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
           return `<tr>
-            <td>${toDateLabel(p.payment_date)}</td>
-            <td>
-              <div>${escapeHtml(p.title)}</div>
-              ${detail ? `<div style="font-size:12px; color:#6b7280; margin-top:2px">${escapeHtml(detail.paidLine)}</div>` : ""}
-              ${detail ? `<div style="font-size:12px; color:#6b7280">${escapeHtml(detail.splitLine)}</div>` : ""}
-              ${detail ? `<div style="font-size:12px; color:#4b5563"><strong>${escapeHtml(detail.resultLine)}</strong></div>` : ""}
+            <td data-label="Date">${toDateLabel(p.payment_date)}</td>
+            <td data-label="Title">
+              <div class="payment-title">${escapeHtml(p.title)}</div>
+              ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
+              ${detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
+              ${detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}
             </td>
-            <td>${escapeHtml(categoryLabel)}</td>
-            <td>${escapeHtml(typeLabel)}</td>
-            <td>${escapeHtml(payer)}</td>
-            <td style="text-align:right">${formatGbp(p.amount_gbp)}</td>
+            <td data-label="Category"><span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span></td>
+            <td data-label="Type"><span class="pill" title="${escapeHtml(typeLabel)}" aria-label="${escapeHtml(typeLabel)}">${typeIcon(typeLabel)}</span></td>
+            <td data-label="Payer">${escapeHtml(payer)}</td>
+            <td data-label="Amount" style="text-align:right"><strong>${formatGbp(p.amount_gbp)}</strong></td>
           </tr>`;
         })
         .join("");
       if (existingRows) {
         list.innerHTML = `
-          <div style="overflow:auto">
-            <table style="width:100%; border-collapse:collapse">
+          <div class="payments-table-wrap">
+            <table class="payments-table">
               <thead>
                 <tr>
                   <th style="text-align:left">Date</th>
