@@ -30,6 +30,7 @@
         <h1>🐳 Finances</h1>
         <div class="actions">
           <button id="open-settings" type="button">Settings</button>
+          <button id="open-settlement" type="button">Settle Up</button>
           <button id="add-payment" type="button" class="primary">Add Payment</button>
         </div>
       </header>
@@ -63,55 +64,60 @@
         </div>
       </section>
 
-      <section class="accordion" data-section="insights">
-        <button class="accordion-toggle" type="button">Stats & Insights</button>
-        <div class="accordion-content">
-          <div id="insights-list" class="card">Loading insights...</div>
-        </div>
-      </section>
     </main>
 
     <dialog id="payment-modal">
       <form id="payment-form" method="dialog">
         <h3>Add Payment</h3>
         <label>Title <input name="title" required placeholder="Enter item or bill" /></label>
-        <label>Amount <input name="amount" type="number" step="0.01" min="0.01" required placeholder="0.00" /></label>
+        <div class="two-col">
+          <label>Amount <input name="amount" type="number" step="0.01" min="0.01" required placeholder="0.00" /></label>
+          <label>Currency
+            <select name="currency_code">
+              <option value="GBP" selected>GBP</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+            </select>
+          </label>
+        </div>
+        <fieldset>
+          <legend>Split options</legend>
+          <div id="split-presets" class="split-presets"></div>
+        </fieldset>
+        <fieldset id="advanced-split-fields" class="hidden">
+          <legend>Advanced options</legend>
+          <label>Owes split mode
+            <select id="advanced-owes-mode">
+              <option value="percentage">Percentage</option>
+              <option value="fixed">Fixed amount (GBP)</option>
+              <option value="ratio">Ratio</option>
+            </select>
+          </label>
+          <div id="split-rows">Loading members...</div>
+          <div id="split-validation-banner" class="warning-banner hidden"></div>
+          <div id="net-effect-preview" class="card" style="padding:10px; margin-top:8px">
+            Enter amount and payer split to see net effect.
+          </div>
+        </fieldset>
         <div class="quick-date-row">
           <button type="button" class="chip" data-quick-date="today">Today</button>
           <button type="button" class="chip" data-quick-date="yesterday">Yesterday</button>
           <button type="button" class="chip" data-quick-date="month-start">Month start</button>
         </div>
-        <label>Date <input name="payment_date" type="date" required /></label>
-        <label>Currency
-          <select name="currency_code">
-            <option value="GBP" selected>GBP</option>
-            <option value="USD">USD</option>
-            <option value="EUR">EUR</option>
-          </select>
-        </label>
+        <div class="two-col">
+          <label>Date <input name="payment_date" type="date" required /></label>
+          <label>Category
+            <select name="category_key" id="category-select">
+              <option value="other">Other</option>
+            </select>
+          </label>
+        </div>
         <label id="fx-rate-to-gbp-row" class="hidden">FX rate to GBP (required if non-GBP)
           <input name="fx_rate_to_gbp" type="number" step="0.00000001" min="0.00000001" placeholder="1.00000000" />
         </label>
         <label id="fx-rate-date-row" class="hidden">FX rate date
           <input name="fx_rate_date" type="date" />
         </label>
-        <label>Category
-          <select name="category_key" id="category-select">
-            <option value="other">Other</option>
-          </select>
-        </label>
-        <fieldset>
-          <legend>Split options</legend>
-          <div id="split-presets" class="split-presets"></div>
-          <button id="toggle-advanced-split" type="button" class="chip">More options</button>
-        </fieldset>
-        <fieldset id="advanced-split-fields" class="hidden">
-          <legend>Advanced paid-by (%)</legend>
-          <div id="paid-by-rows">Loading members...</div>
-        </fieldset>
-        <div id="net-effect-preview" class="card" style="padding:10px">
-          Enter amount and payer split to see net effect.
-        </div>
         <label>Notes <textarea name="notes"></textarea></label>
 
         <label class="inline">
@@ -125,7 +131,6 @@
               <option value="annual">Annual</option>
             </select>
           </label>
-          <label>Start date <input name="start_date" type="date" /></label>
           <label>End date <input name="end_date" type="date" /></label>
         </fieldset>
 
@@ -143,6 +148,64 @@
       <form method="dialog" class="settings-actions">
         <button id="run-sync" type="button">Run recurring sync now</button>
         <button>Close</button>
+      </form>
+    </dialog>
+
+    <dialog id="settlement-modal">
+      <form id="settlement-form" method="dialog">
+        <h3>Settle Up</h3>
+        <label>From (who pays)
+          <select name="from_user_id" required></select>
+        </label>
+        <label>To (who is paid)
+          <select name="to_user_id" required></select>
+        </label>
+        <label>Amount (GBP)
+          <input name="amount" type="number" min="0.01" step="0.01" required />
+        </label>
+        <label>Date
+          <input name="payment_date" type="date" required />
+        </label>
+        <label>Notes
+          <textarea name="notes" placeholder="Optional"></textarea>
+        </label>
+        <menu>
+          <button id="cancel-settlement" type="button">Cancel</button>
+          <button id="save-settlement" value="default" class="primary">Save settlement</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="recurring-template-modal">
+      <form id="recurring-template-form" method="dialog">
+        <h3>Edit Recurring Template</h3>
+        <input type="hidden" name="template_id" />
+        <label>Title <input name="title" required /></label>
+        <label>Amount <input name="amount" type="number" step="0.01" min="0.01" required /></label>
+        <label>Category
+          <select name="category_key" id="recurring-template-category">
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>Frequency
+          <select name="frequency">
+            <option value="monthly">Monthly</option>
+            <option value="annual">Annual</option>
+          </select>
+        </label>
+        <label>Start date <input name="start_date" type="date" required /></label>
+        <label>End date <input name="end_date" type="date" /></label>
+        <label>Status
+          <select name="status">
+            <option value="active">active</option>
+            <option value="paused">paused</option>
+          </select>
+        </label>
+        <div id="recurring-impact" class="card">No impact calculated yet.</div>
+        <menu>
+          <button id="cancel-recurring-template" type="button">Cancel</button>
+          <button id="save-recurring-template" value="default" class="primary">Save template</button>
+        </menu>
       </form>
     </dialog>
 

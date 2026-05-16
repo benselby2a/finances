@@ -112,3 +112,76 @@ Build a single-screen web app hosted on GitHub Pages that tracks shared costs, b
   - Category/type icons are consistently visible.
   - Tooltips provide metadata explanations without clutter.
   - Mobile experience remains fully functional and legible.
+
+## UX Revamp Execution Plan (Apple-esque Minimalist)
+### Design System Foundation
+- Define CSS design tokens for color, spacing, radius, border, shadow, and motion timing.
+- Standardize typography scale (title, section heading, body, metadata, helper text).
+- Establish shared component styles: buttons, chips, badges, cards, inputs, tables, dialogs.
+- Keep transitions subtle and consistent (accordion, modal, toast, button states).
+
+### Phase 1: Layout and Navigation Polish
+- Refine top bar with clean spacing, balanced action sizing, and sticky behavior on mobile.
+- Normalize section card rhythm and whitespace for a cleaner single-screen scan.
+- Improve accordion affordances with clear expanded/collapsed states.
+
+### Phase 2: Payments Experience Overhaul
+- Desktop table improvements:
+  - sticky header,
+  - zebra rows,
+  - stronger alignment for GBP amounts,
+  - clearer actions column spacing.
+- Mobile payments fallback:
+  - card-style rows,
+  - key-value blocks for date/category/type/payer/amount,
+  - no horizontal scroll by default.
+- Keep per-payment mini breakdown in small text:
+  - `Paid by`,
+  - `Split`,
+  - `Result (who owes whom)`,
+  - show only when reconciled and accurate.
+
+### Phase 3: Forms and Data Entry Refinement
+- Add/Edit payment modal:
+  - preserve minimal flow,
+  - tighten field grouping and labels,
+  - improve validation copy and visibility.
+- Recurring template editor:
+  - improve impact section hierarchy (before/after date/amount),
+  - clearer template actions (save/delete/cancel).
+- Settlement modal:
+  - compact and clear with explicit payer/payee roles.
+
+### Phase 4: Iconography and Tooltips
+- Introduce category icon mapping (household bills, travel, insurance, mortgage, etc.).
+- Introduce payment-type icon mapping (`one_off`, `settlement`, `recurring_initial`, `recurring_generated`).
+- Add unobtrusive tooltips for:
+  - category/type indicators,
+  - balance/settlement hints,
+  - recurring/reminder status.
+
+### Phase 5: Reminders, Recurring, and Settings Polish
+- Reminders become concise, timeline-like informational rows.
+- Recurring rows use badges/chips for frequency and status.
+- Settings sync diagnostics:
+  - preserve 10-day summary,
+  - improve readability of created/skipped/failed/missing counts.
+
+### Mobile-First and Accessibility Guardrails
+- Minimum tap target size of 44px for interactive controls.
+- Ensure strong contrast for text and subtle UI chrome.
+- Keyboard/focus states remain visible and consistent.
+- Maintain semantic labels and readable metadata hierarchy.
+
+### Delivery Milestones
+- Milestone A: Design tokens + component baseline.
+- Milestone B: Payments desktop/mobile parity.
+- Milestone C: Form/dialog polish + recurring/settlement flow refinement.
+- Milestone D: Icons, tooltips, motion, and final responsive QA pass.
+
+### UX Acceptance Criteria
+- The UI feels clean, minimal, and cohesive across desktop/mobile.
+- Users can parse any payment row and understand “who paid / who owes” in under 3 seconds.
+- Core actions (add payment, settle up, recurring management) are obvious and low-friction.
+- No horizontal scrolling required for primary flows on mobile.
+- Visual language remains subtle and “Apple-esque” without unnecessary ornamentation.

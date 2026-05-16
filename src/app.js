@@ -1,6 +1,6 @@
 const STORAGE_KEYS = {
   lastOpenedAt: "finance.lastOpenedAt",
-  lastSummaryWindow: "finance.lastSummaryWindow",
+  lastSummaryWindow: "finance.lastSummaryShownForWindow",
   lastSyncResult: "finance.lastSyncResult"
 };
 const RECURRING_MAX_BACKFILL_PER_TEMPLATE = 240;
@@ -19,9 +19,13 @@ const state = {
   paymentsOffset: 0,
   paymentsHasMore: false,
   editingPaymentId: null,
+  editingPaymentMeta: null,
   titleCategoryIndex: [],
   categoryManuallySet: false,
-  splitMode: "preset_you_equal"
+  splitMode: "preset_you_equal",
+  advancedOwesMode: "percentage",
+  editingTemplateId: null,
+  editingTemplateBefore: null
 };
 
 const GBP_FORMAT = new Intl.NumberFormat("en-GB", {
@@ -87,16 +91,22 @@ function setupAccordion() {
 function setupModals() {
   const paymentModal = document.getElementById("payment-modal");
   const settingsModal = document.getElementById("settings-modal");
+  const settlementModal = document.getElementById("settlement-modal");
+  const recurringTemplateModal = document.getElementById("recurring-template-modal");
   document.getElementById("add-payment").addEventListener("click", () => {
     if (!state.editingPaymentId) {
       setDefaultPaymentDateIfEmpty();
       setDefaultSplitPreset();
+      state.editingPaymentMeta = null;
     }
     paymentModal.showModal();
   });
   document.getElementById("open-settings").addEventListener("click", () => settingsModal.showModal());
   document.getElementById("open-settings").addEventListener("click", async () => {
     await renderSyncLogs();
+  });
+  document.getElementById("open-settlement")?.addEventListener("click", () => {
+    openSettlementModal();
   });
 
   const recurringToggle = document.getElementById("is-recurring");
@@ -106,7 +116,7 @@ function setupModals() {
   const amountInput = document.querySelector("#payment-form input[name='amount']");
   const categorySelect = document.getElementById("category-select");
   const quickDateButtons = document.querySelectorAll("[data-quick-date]");
-  const advancedSplitFields = document.getElementById("advanced-split-fields");
+  const advancedOwesMode = document.getElementById("advanced-owes-mode");
   recurringToggle.addEventListener("change", () => {
     recurringFields.classList.toggle("hidden", !recurringToggle.checked);
     if (recurringToggle.checked && !state.editingPaymentId) {
@@ -123,6 +133,12 @@ function setupModals() {
     maybeAutofillCategoryFromTitle();
   });
   amountInput?.addEventListener("input", () => {
+    updatePaymentNetEffectPreview();
+  });
+  advancedOwesMode?.addEventListener("change", () => {
+    state.advancedOwesMode = advancedOwesMode.value || "percentage";
+    renderSplitRows();
+    updateSplitValidationBanner(false);
     updatePaymentNetEffectPreview();
   });
   quickDateButtons.forEach((btn) => {
@@ -144,13 +160,6 @@ function setupModals() {
       }
     });
   });
-  document.getElementById("toggle-advanced-split")?.addEventListener("click", () => {
-    if (!advancedSplitFields) return;
-    const nowOpen = advancedSplitFields.classList.contains("hidden");
-    advancedSplitFields.classList.toggle("hidden", !nowOpen);
-    if (nowOpen) state.splitMode = "custom";
-    updatePaymentNetEffectPreview();
-  });
   toggleFxFields(currencySelect?.value || "GBP");
 
   document.getElementById("payment-form").addEventListener("submit", async (event) => {
@@ -164,6 +173,7 @@ function setupModals() {
       document.getElementById("recurring-fields").classList.add("hidden");
       toggleFxFields("GBP");
       state.editingPaymentId = null;
+      state.editingPaymentMeta = null;
       state.categoryManuallySet = false;
       state.splitMode = "preset_you_equal";
       document.querySelector("#payment-modal h3").textContent = "Add Payment";
@@ -182,6 +192,7 @@ function setupModals() {
     document.getElementById("recurring-fields")?.classList.add("hidden");
     toggleFxFields("GBP");
     state.editingPaymentId = null;
+    state.editingPaymentMeta = null;
     state.categoryManuallySet = false;
     state.splitMode = "preset_you_equal";
     document.querySelector("#payment-modal h3").textContent = "Add Payment";
@@ -200,6 +211,221 @@ function setupModals() {
     await loadDashboardData();
     await renderSyncLogs();
   });
+
+  document.getElementById("settlement-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      await saveSettlementFromForm(form);
+      settlementModal?.close();
+      form.reset();
+      showToast("Settlement recorded.");
+      await loadDashboardData();
+    } catch (error) {
+      console.error(error);
+      showToast(`Failed to save settlement: ${formatError(error)}`);
+    }
+  });
+  document.getElementById("cancel-settlement")?.addEventListener("click", () => {
+    const form = document.getElementById("settlement-form");
+    form?.reset();
+    settlementModal?.close();
+  });
+
+  document.getElementById("recurring-template-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      await saveRecurringTemplateFromForm(form);
+      recurringTemplateModal?.close();
+      showToast("Recurring template updated.");
+      await loadDashboardData();
+    } catch (error) {
+      console.error(error);
+      showToast(`Failed to update recurring template: ${formatError(error)}`);
+    }
+  });
+  document.getElementById("cancel-recurring-template")?.addEventListener("click", () => {
+    recurringTemplateModal?.close();
+  });
+  const recurringTemplateForm = document.getElementById("recurring-template-form");
+  recurringTemplateForm?.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener("change", () => renderRecurringImpactPreview());
+    el.addEventListener("input", () => renderRecurringImpactPreview());
+  });
+}
+
+function computeNextDueDateForTemplate(template, now = new Date()) {
+  if (!template?.start_date) return null;
+  const start = new Date(`${template.start_date}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (end && end < todayUtc) return null;
+
+  if (template.frequency === "annual") {
+    const month = start.getUTCMonth();
+    const day = start.getUTCDate();
+    let due = new Date(Date.UTC(todayUtc.getUTCFullYear(), month, day));
+    if (due < todayUtc) due = new Date(Date.UTC(todayUtc.getUTCFullYear() + 1, month, day));
+    if (due < start) due = start;
+    if (end && due > end) return null;
+    return due.toISOString().slice(0, 10);
+  }
+
+  const configuredDay = Number(template.day_of_month || start.getUTCDate() || 1);
+  const clampDay = (year, month, day) => {
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    return Math.max(1, Math.min(day, lastDay));
+  };
+  let year = todayUtc.getUTCFullYear();
+  let month = todayUtc.getUTCMonth();
+  let due = new Date(Date.UTC(year, month, clampDay(year, month, configuredDay)));
+  if (due < todayUtc) {
+    month += 1;
+    if (month > 11) {
+      month = 0;
+      year += 1;
+    }
+    due = new Date(Date.UTC(year, month, clampDay(year, month, configuredDay)));
+  }
+  if (due < start) due = start;
+  if (end && due > end) return null;
+  return due.toISOString().slice(0, 10);
+}
+
+function renderRecurringImpactPreview() {
+  const target = document.getElementById("recurring-impact");
+  const form = document.getElementById("recurring-template-form");
+  if (!target || !form || !state.editingTemplateBefore) return;
+  const before = state.editingTemplateBefore;
+  const after = {
+    ...before,
+    title: String(form.title.value || before.title || "").trim(),
+    amount: Number(form.amount.value || before.amount || 0),
+    frequency: String(form.frequency.value || before.frequency || "monthly"),
+    start_date: String(form.start_date.value || before.start_date || ""),
+    end_date: String(form.end_date.value || "") || null,
+    status: String(form.status.value || before.status || "active")
+  };
+  after.day_of_month = after.frequency === "monthly" ? new Date(`${after.start_date}T00:00:00Z`).getUTCDate() : null;
+
+  const nextBefore = computeNextDueDateForTemplate(before);
+  const nextAfter = after.status === "active" ? computeNextDueDateForTemplate(after) : null;
+  const amountBefore = Number(before.amount || 0);
+  const amountAfter = Number(after.amount || 0);
+  const amountChanged = Math.abs(amountAfter - amountBefore) > 0.009;
+  const dateChanged = String(nextBefore || "") !== String(nextAfter || "");
+
+  target.innerHTML = `
+    <div style="font-weight:600; margin-bottom:6px">Impact on next scheduled payment</div>
+    <div style="display:grid; gap:4px">
+      <div>Next date: <strong>${nextBefore ? toDateLabel(nextBefore) : "None"}</strong> <span aria-hidden="true">→</span> <strong>${nextAfter ? toDateLabel(nextAfter) : "None"}</strong>${dateChanged ? ' <span style="color:#b45309">(changed)</span>' : ""}</div>
+      <div>Amount: <strong>${formatGbp(amountBefore)}</strong> <span aria-hidden="true">→</span> <strong>${formatGbp(amountAfter)}</strong>${amountChanged ? ' <span style="color:#b45309">(changed)</span>' : ""}</div>
+    </div>
+  `;
+}
+
+async function openRecurringTemplateModal(templateId) {
+  const { data, error } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_templates")
+    .select("id, title, amount, frequency, day_of_month, start_date, end_date, status, category_key")
+    .eq("id", templateId)
+    .single();
+  if (error) {
+    showToast(`Failed to load recurring template: ${formatError(error)}`);
+    return;
+  }
+  const form = document.getElementById("recurring-template-form");
+  if (!form) return;
+  syncRecurringTemplateCategoryOptions();
+  form.template_id.value = data.id;
+  form.title.value = data.title || "";
+  form.amount.value = data.amount || "";
+  form.category_key.value = data.category_key || "other";
+  form.frequency.value = data.frequency || "monthly";
+  form.start_date.value = data.start_date || "";
+  form.end_date.value = data.end_date || "";
+  form.status.value = data.status || "active";
+  state.editingTemplateId = data.id;
+  state.editingTemplateBefore = { ...data };
+  renderRecurringImpactPreview();
+  document.getElementById("recurring-template-modal")?.showModal();
+}
+
+async function saveRecurringTemplateFromForm(form) {
+  const templateId = String(form.template_id.value || state.editingTemplateId || "");
+  if (!templateId) throw new Error("Missing template id.");
+  const title = toTitleCaseText(form.title.value);
+  const amount = parsePositiveAmount(form.amount.value, "Amount");
+  const categoryKey = String(form.category_key.value || "").trim() || null;
+  const frequency = String(form.frequency.value || "monthly");
+  const startDate = String(form.start_date.value || "");
+  const endDate = toIsoDateOrNull(String(form.end_date.value || ""));
+  const status = String(form.status.value || "active");
+  if (!title) throw new Error("Title is required.");
+  if (!startDate) throw new Error("Start date is required.");
+  const dayOfMonth = frequency === "monthly" ? new Date(`${startDate}T00:00:00Z`).getUTCDate() : null;
+
+  const { error } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_templates")
+    .update({
+      title,
+      amount,
+      category_key: categoryKey,
+      frequency,
+      start_date: startDate,
+      end_date: endDate,
+      day_of_month: dayOfMonth,
+      status
+    })
+    .eq("id", templateId);
+  if (error) throw error;
+}
+
+async function maybePropagateRecurringTemplateFromPaymentEdit({ title, amount, categoryKey, notes, paymentDate }) {
+  const meta = state.editingPaymentMeta;
+  if (!meta?.recurring_template_id || meta.source_type !== "recurring_generated") return;
+
+  const templateId = meta.recurring_template_id;
+  const { data: template, error } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_templates")
+    .select("id, title, amount, frequency, day_of_month, start_date, end_date, status, category_key, notes")
+    .eq("id", templateId)
+    .single();
+  if (error) throw error;
+
+  const beforeNext = template.status === "active" ? computeNextDueDateForTemplate(template) : null;
+  const after = {
+    ...template,
+    title,
+    amount,
+    category_key: categoryKey,
+    notes,
+    day_of_month: template.frequency === "monthly" ? new Date(`${paymentDate}T00:00:00Z`).getUTCDate() : template.day_of_month
+  };
+  const afterNext = after.status === "active" ? computeNextDueDateForTemplate(after) : null;
+  const impactText = `Next scheduled payment: ${beforeNext ? toDateLabel(beforeNext) : "None"} → ${afterNext ? toDateLabel(afterNext) : "None"} | Amount: ${formatGbp(template.amount)} → ${formatGbp(amount)}`;
+
+  const ok = window.confirm(`Apply these edits to the recurring template defaults as well?\n\n${impactText}`);
+  if (!ok) return;
+
+  const { error: updateError } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_templates")
+    .update({
+      title,
+      amount,
+      category_key: categoryKey,
+      notes,
+      day_of_month: after.day_of_month
+    })
+    .eq("id", templateId);
+  if (updateError) throw updateError;
+  showToast("Recurring template defaults updated from payment edit.");
 }
 
 function toggleFxFields(currencyCode) {
@@ -220,6 +446,13 @@ function setDefaultPaymentDateIfEmpty() {
   }
 }
 
+function syncRecurringTemplateCategoryOptions() {
+  const source = document.getElementById("category-select");
+  const target = document.getElementById("recurring-template-category");
+  if (!source || !target) return;
+  target.innerHTML = source.innerHTML || `<option value="other">Other</option>`;
+}
+
 function setDefaultRecurringDates() {
   const form = document.getElementById("payment-form");
   if (!form) return;
@@ -227,8 +460,39 @@ function setDefaultRecurringDates() {
   const oneYearLater = new Date(today);
   oneYearLater.setUTCFullYear(oneYearLater.getUTCFullYear() + 1);
 
-  if (!form.start_date.value) form.start_date.value = toIsoDate(today);
   if (!form.end_date.value) form.end_date.value = toIsoDate(oneYearLater);
+}
+
+function populateSettlementPartyOptions() {
+  const form = document.getElementById("settlement-form");
+  if (!form) return;
+  const options = state.members
+    .map((m) => `<option value="${escapeHtml(m.user_id)}">${escapeHtml(m.display_name)}</option>`)
+    .join("");
+  form.from_user_id.innerHTML = options;
+  form.to_user_id.innerHTML = options;
+}
+
+function openSettlementModal(prefill = null) {
+  const modal = document.getElementById("settlement-modal");
+  const form = document.getElementById("settlement-form");
+  if (!modal || !form) return;
+  populateSettlementPartyOptions();
+  form.payment_date.value = toIsoDate(new Date());
+  form.amount.value = "";
+  form.notes.value = "";
+  if (prefill) {
+    form.from_user_id.value = prefill.fromUserId || "";
+    form.to_user_id.value = prefill.toUserId || "";
+    form.amount.value = Number(prefill.amount || 0).toFixed(2);
+  } else if (state.members.length === 2 && state.currentUser?.id) {
+    const other = getOtherMember();
+    if (other) {
+      form.from_user_id.value = state.currentUser.id;
+      form.to_user_id.value = other.user_id;
+    }
+  }
+  modal.showModal();
 }
 
 function getOtherMember() {
@@ -276,17 +540,25 @@ function renderSplitPresets() {
       <input type="radio" name="split_mode" value="preset_other_full" />
       <span class="split-preset-label"><span class="split-preset-title">${escapeHtml(other.display_name)} paid, you owe all</span><span class="split-preset-sub">${escapeHtml(other.display_name)} owes none</span></span>
     </label>
+    <label class="split-preset">
+      <input type="radio" name="split_mode" value="custom" />
+      <span class="split-preset-label"><span class="split-preset-title">More options</span><span class="split-preset-sub">Set custom owes split mode and values</span></span>
+    </label>
   `;
   target.querySelectorAll("input[name='split_mode']").forEach((el) => {
     el.addEventListener("change", () => {
       state.splitMode = el.value;
       applySplitModeSelection();
+      updateSplitValidationBanner(false);
       updatePaymentNetEffectPreview();
     });
   });
 }
 
 function applySplitModeSelection() {
+  const advanced = document.getElementById("advanced-split-fields");
+  if (advanced) advanced.classList.toggle("hidden", state.splitMode !== "custom");
+  if (state.splitMode === "custom") return;
   if (state.members.length !== 2 || !state.currentUser?.id) return;
   const other = getOtherMember();
   if (!other) return;
@@ -301,10 +573,14 @@ function applySplitModeSelection() {
 function setDefaultSplitPreset() {
   const advanced = document.getElementById("advanced-split-fields");
   if (advanced) advanced.classList.add("hidden");
+  const owesMode = document.getElementById("advanced-owes-mode");
+  if (owesMode) owesMode.value = "percentage";
+  state.advancedOwesMode = "percentage";
   state.splitMode = "preset_you_equal";
   const radio = document.querySelector("input[name='split_mode'][value='preset_you_equal']");
   if (radio) radio.checked = true;
   applySplitModeSelection();
+  updateSplitValidationBanner(false);
 }
 
 function normalizeTitle(value) {
@@ -313,6 +589,19 @@ function normalizeTitle(value) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function toTitleCaseText(value) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
+  if (!cleaned) return "";
+  return cleaned
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function maybeAutofillCategoryFromTitle() {
@@ -468,12 +757,12 @@ async function processRecurringPayments() {
         const { data: existingLog, error: existingLogError } = await state.supabase
           .schema("finance_app")
           .from("recurring_generation_log")
-          .select("id")
+          .select("id, status")
           .eq("recurring_template_id", t.id)
           .eq("due_date", dueDateStr)
           .maybeSingle();
         if (existingLogError) throw existingLogError;
-        if (existingLog?.id) continue;
+        if (existingLog?.id && existingLog.status !== "failed") continue;
 
         const { data: existingPayment, error: existingPaymentError } = await state.supabase
           .schema("finance_app")
@@ -563,23 +852,24 @@ async function processRecurringPayments() {
 
 function computeDueDates(template, today) {
   const dates = [];
-  const start = new Date(`${template.start_date}T00:00:00`);
+  const start = new Date(`${template.start_date}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return dates;
-  const end = template.end_date ? new Date(`${template.end_date}T00:00:00`) : null;
-  const lastProcessedDate = template.last_processed_at ? new Date(template.last_processed_at) : null;
-  const floor = lastProcessedDate && !Number.isNaN(lastProcessedDate.getTime()) ? lastProcessedDate : null;
+  const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const floorDateStr = template.last_processed_at ? String(template.last_processed_at).slice(0, 10) : null;
 
   if (template.frequency === "annual") {
     let year = start.getUTCFullYear();
-    while (year <= today.getUTCFullYear()) {
+    while (year <= todayUtc.getUTCFullYear()) {
       const d = new Date(Date.UTC(year, start.getUTCMonth(), start.getUTCDate()));
+      const dStr = d.toISOString().slice(0, 10);
       if (d < start) {
         year += 1;
         continue;
       }
-      if (d > today) break;
+      if (d > todayUtc) break;
       if (end && d > end) break;
-      if (!floor || d > floor) dates.push(d);
+      if (!floorDateStr || dStr > floorDateStr) dates.push(d);
       year += 1;
     }
     return dates;
@@ -588,12 +878,13 @@ function computeDueDates(template, today) {
   // monthly default
   const day = Number(template.day_of_month || start.getUTCDate());
   let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-  while (cursor <= today) {
+  while (cursor <= todayUtc) {
     const year = cursor.getUTCFullYear();
     const month = cursor.getUTCMonth();
     const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
     const date = new Date(Date.UTC(year, month, Math.min(day, lastDay)));
-    if (date >= start && date <= today && (!end || date <= end) && (!floor || date > floor)) {
+    const dateStr = date.toISOString().slice(0, 10);
+    if (date >= start && date <= todayUtc && (!end || date <= end) && (!floorDateStr || dateStr > floorDateStr)) {
       dates.push(date);
     }
     cursor = new Date(Date.UTC(year, month + 1, 1));
@@ -797,37 +1088,45 @@ async function loadCategoryOptions() {
 
 function renderPaidByRows(prefill = null) {
   const target = document.getElementById("paid-by-rows");
-  if (!target) return;
   if (!state.members.length) {
-    target.textContent = "No members found.";
+    if (target) target.textContent = "No members found.";
+    renderSplitRows();
+    renderSplitPresets();
     return;
   }
 
-  const selected = new Map();
-  if (prefill?.length) {
-    for (const p of prefill) selected.set(p.user_id, Number(p.percentage || 0));
-  } else if (state.currentUser?.id) {
-    selected.set(state.currentUser.id, 100);
+  if (target) {
+    const selected = new Map();
+    if (prefill?.length) {
+      for (const p of prefill) selected.set(p.user_id, Number(p.percentage || 0));
+    } else if (state.currentUser?.id) {
+      selected.set(state.currentUser.id, 100);
+    }
+    target.innerHTML = state.members
+      .map((m) => {
+        const pct = selected.get(m.user_id) || 0;
+        const checked = pct > 0 ? "checked" : "";
+        return `<div style="display:grid; grid-template-columns: 1fr 110px; gap:8px; align-items:center; margin-bottom:6px">
+          <label class="inline">
+            <input type="checkbox" data-paid-by-user="${m.user_id}" ${checked} />
+            ${escapeHtml(m.display_name)}
+          </label>
+          <input type="number" min="0" max="100" step="0.01" data-paid-by-pct="${m.user_id}" value="${pct}" />
+        </div>`;
+      })
+      .join("");
+
+    target.querySelectorAll("[data-paid-by-user], [data-paid-by-pct]").forEach((el) => {
+      el.addEventListener("change", () => updatePaymentNetEffectPreview());
+      el.addEventListener("input", () => updatePaymentNetEffectPreview());
+      if (el.hasAttribute("data-paid-by-pct")) {
+        el.addEventListener("blur", () => {
+          updateSplitValidationBanner(true);
+        });
+      }
+    });
   }
-
-  target.innerHTML = state.members
-    .map((m) => {
-      const pct = selected.get(m.user_id) || 0;
-      const checked = pct > 0 ? "checked" : "";
-      return `<div style="display:grid; grid-template-columns: 1fr 110px; gap:8px; align-items:center; margin-bottom:6px">
-        <label class="inline">
-          <input type="checkbox" data-paid-by-user="${m.user_id}" ${checked} />
-          ${escapeHtml(m.display_name)}
-        </label>
-        <input type="number" min="0" max="100" step="0.01" data-paid-by-pct="${m.user_id}" value="${pct}" />
-      </div>`;
-    })
-    .join("");
-
-  target.querySelectorAll("[data-paid-by-user], [data-paid-by-pct]").forEach((el) => {
-    el.addEventListener("change", () => updatePaymentNetEffectPreview());
-    el.addEventListener("input", () => updatePaymentNetEffectPreview());
-  });
+  renderSplitRows();
   renderSplitPresets();
   if (!prefill?.length) {
     setDefaultSplitPreset();
@@ -835,16 +1134,78 @@ function renderPaidByRows(prefill = null) {
     state.splitMode = "custom";
     const advanced = document.getElementById("advanced-split-fields");
     if (advanced) advanced.classList.remove("hidden");
-    const presetRadios = document.querySelectorAll("input[name='split_mode']");
-    presetRadios.forEach((r) => {
-      r.checked = false;
-    });
+    const customRadio = document.querySelector("input[name='split_mode'][value='custom']");
+    if (customRadio) customRadio.checked = true;
   }
+  updateSplitValidationBanner(false);
   updatePaymentNetEffectPreview();
+}
+
+function renderSplitRows(prefill = null) {
+  const target = document.getElementById("split-rows");
+  if (!target) return;
+  if (!state.members.length) {
+    target.textContent = "No members found.";
+    return;
+  }
+  const selected = new Map();
+  const amount = Number(document.querySelector("#payment-form input[name='amount']")?.value || 0);
+  if (prefill?.length) {
+    for (const p of prefill) selected.set(p.user_id, Number(p.value || 0));
+  } else {
+    if (state.advancedOwesMode === "ratio") {
+      state.members.forEach((m) => selected.set(m.user_id, 1));
+    } else if (state.advancedOwesMode === "percentage") {
+      const each = state.members.length ? Number((100 / state.members.length).toFixed(2)) : 0;
+      state.members.forEach((m, idx) => {
+        const value = idx === 0 ? Number((100 - each * (state.members.length - 1)).toFixed(2)) : each;
+        selected.set(m.user_id, value);
+      });
+    } else if (state.advancedOwesMode === "fixed") {
+      const each = state.members.length ? Number((amount / state.members.length).toFixed(2)) : 0;
+      state.members.forEach((m, idx) => {
+        const value = idx === 0 ? Number((amount - each * (state.members.length - 1)).toFixed(2)) : each;
+        selected.set(m.user_id, value);
+      });
+    }
+  }
+  const suffix = state.advancedOwesMode === "percentage" ? "%" : state.advancedOwesMode === "fixed" ? "GBP" : "ratio";
+  target.innerHTML = state.members
+    .map((m) => {
+      const value = selected.get(m.user_id) || 0;
+      const checked = selected.has(m.user_id) ? "checked" : "";
+      return `<div class="advanced-row">
+        <label class="inline"><input type="checkbox" data-split-user="${m.user_id}" ${checked} /> ${escapeHtml(m.display_name)}</label>
+        <input type="number" step="0.01" min="0" data-split-value="${m.user_id}" value="${value}" placeholder="${suffix}" />
+      </div>`;
+    })
+    .join("");
+  target.querySelectorAll("[data-split-user], [data-split-value]").forEach((el) => {
+    el.addEventListener("input", () => {
+      updateSplitValidationBanner(false);
+      updatePaymentNetEffectPreview();
+    });
+    el.addEventListener("change", () => {
+      updateSplitValidationBanner(false);
+      updatePaymentNetEffectPreview();
+    });
+    if (el.hasAttribute("data-split-value")) {
+      el.addEventListener("blur", () => updateSplitValidationBanner(true));
+    }
+  });
 }
 
 function getPaidByAllocations(amount) {
   const checks = Array.from(document.querySelectorAll("[data-paid-by-user]"));
+  if (!checks.length) {
+    const other = getOtherMember();
+    let payerUserId = state.currentUser?.id || state.members[0]?.user_id;
+    if (state.splitMode === "preset_other_equal" || state.splitMode === "preset_other_full") {
+      payerUserId = other?.user_id || payerUserId;
+    }
+    if (!payerUserId) throw new Error("No payer found.");
+    return [{ user_id: payerUserId, amount: Number(amount.toFixed(2)), pct: 100 }];
+  }
   const selected = [];
   for (const c of checks) {
     const userId = c.getAttribute("data-paid-by-user");
@@ -856,6 +1217,9 @@ function getPaidByAllocations(amount) {
 
   const totalPct = selected.reduce((sum, r) => sum + r.pct, 0);
   if (totalPct <= 0) throw new Error("Paid-by percentage total must be greater than 0.");
+  if (Math.abs(totalPct - 100) > 0.01) {
+    throw new Error(`Paid-by percentage total must equal 100% (currently ${totalPct.toFixed(2)}%).`);
+  }
 
   const rows = selected.map((r) => ({
     user_id: r.user_id,
@@ -866,6 +1230,86 @@ function getPaidByAllocations(amount) {
   const delta = Number((amount - roundedTotal).toFixed(2));
   if (Math.abs(delta) >= 0.01 && rows.length) rows[0].amount = Number((rows[0].amount + delta).toFixed(2));
   return rows;
+}
+
+function getPaidBySelectionSummary() {
+  const checks = Array.from(document.querySelectorAll("[data-paid-by-user]"));
+  if (!checks.length) {
+    const other = getOtherMember();
+    let payerUserId = state.currentUser?.id || state.members[0]?.user_id;
+    if (state.splitMode === "preset_other_equal" || state.splitMode === "preset_other_full") {
+      payerUserId = other?.user_id || payerUserId;
+    }
+    return { selected: payerUserId ? [{ user_id: payerUserId, pct: 100 }] : [], totalPct: payerUserId ? 100 : 0 };
+  }
+  const selected = [];
+  for (const c of checks) {
+    const userId = c.getAttribute("data-paid-by-user");
+    const pctInput = document.querySelector(`[data-paid-by-pct='${userId}']`);
+    const pct = Number(pctInput?.value || 0);
+    if (c.checked) selected.push({ user_id: userId, pct });
+  }
+  const totalPct = selected.reduce((sum, r) => sum + Number(r.pct || 0), 0);
+  return { selected, totalPct: Number(totalPct.toFixed(2)) };
+}
+
+function getSplitSelectionSummary(amount) {
+  const checks = Array.from(document.querySelectorAll("[data-split-user]"));
+  const selected = [];
+  for (const c of checks) {
+    const userId = c.getAttribute("data-split-user");
+    const valInput = document.querySelector(`[data-split-value='${userId}']`);
+    const value = Number(valInput?.value || 0);
+    if (c.checked) selected.push({ user_id: userId, value });
+  }
+  const mode = state.advancedOwesMode || "percentage";
+  const total = selected.reduce((sum, r) => sum + Number(r.value || 0), 0);
+  return { mode, selected, total: Number(total.toFixed(2)) };
+}
+
+function updateSplitValidationBanner(showIfInvalid = false) {
+  const banner = document.getElementById("split-validation-banner");
+  if (!banner) return true;
+
+  const advancedOpen = !document.getElementById("advanced-split-fields")?.classList.contains("hidden");
+  if (!advancedOpen || state.splitMode !== "custom") {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return true;
+  }
+
+  const paidBy = getPaidBySelectionSummary();
+  const split = getSplitSelectionSummary(Number(document.querySelector("#payment-form input[name='amount']")?.value || 0));
+  const amount = Number(document.querySelector("#payment-form input[name='amount']")?.value || 0);
+  const paidValid = paidBy.selected.length > 0 && Math.abs(paidBy.totalPct - 100) <= 0.01;
+  let splitValid = split.selected.length > 0;
+  if (split.mode === "percentage") splitValid = splitValid && Math.abs(split.total - 100) <= 0.01;
+  if (split.mode === "fixed") splitValid = splitValid && Math.abs(split.total - amount) <= 0.01;
+  if (split.mode === "ratio") splitValid = splitValid && split.total > 0;
+  const valid = paidValid && splitValid;
+  if (valid) {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return true;
+  }
+  if (!showIfInvalid) {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return false;
+  }
+  if (!split.selected.length) {
+    banner.textContent = "Select at least one split member.";
+  } else if (split.mode === "percentage" && Math.abs(split.total - 100) > 0.01) {
+    banner.textContent = `Split percentage must total 100% (currently ${split.total.toFixed(2)}%).`;
+  } else if (split.mode === "fixed" && Math.abs(split.total - amount) > 0.01) {
+    banner.textContent = `Split fixed amounts must total ${formatGbp(amount)} (currently ${formatGbp(split.total)}).`;
+  } else if (split.mode === "ratio" && split.total <= 0) {
+    banner.textContent = "Split ratio must be greater than 0.";
+  } else {
+    banner.textContent = "Advanced split values are invalid.";
+  }
+  banner.classList.remove("hidden");
+  return false;
 }
 
 function getPaidByAllocationsSafe(amount) {
@@ -888,8 +1332,35 @@ function buildEqualSplitRows(amount) {
 
 function buildSplitRows(amount, paidByRows) {
   if (state.members.length !== 2) return buildEqualSplitRows(amount);
-  if (state.splitMode === "custom" || state.splitMode === "preset_you_equal" || state.splitMode === "preset_other_equal") {
+  if (state.splitMode === "preset_you_equal" || state.splitMode === "preset_other_equal") {
     return buildEqualSplitRows(amount);
+  }
+  if (state.splitMode === "custom") {
+    const { mode, selected } = getSplitSelectionSummary(amount);
+    if (!selected.length) throw new Error("Select at least one split member.");
+    if (mode === "percentage") {
+      const totalPct = selected.reduce((s, r) => s + Number(r.value || 0), 0);
+      if (Math.abs(totalPct - 100) > 0.01) throw new Error(`Split percentage must total 100% (currently ${totalPct.toFixed(2)}%).`);
+      const rows = selected.map((r) => ({ user_id: r.user_id, amount: Number(((amount * Number(r.value || 0)) / 100).toFixed(2)) }));
+      const total = rows.reduce((s, r) => s + r.amount, 0);
+      const delta = Number((amount - total).toFixed(2));
+      if (Math.abs(delta) >= 0.01 && rows.length) rows[0].amount = Number((rows[0].amount + delta).toFixed(2));
+      return rows;
+    }
+    if (mode === "fixed") {
+      const total = selected.reduce((s, r) => s + Number(r.value || 0), 0);
+      if (Math.abs(total - amount) > 0.01) throw new Error(`Split fixed amounts must total ${formatGbp(amount)}.`);
+      return selected.map((r) => ({ user_id: r.user_id, amount: Number(Number(r.value || 0).toFixed(2)) }));
+    }
+    if (mode === "ratio") {
+      const totalRatio = selected.reduce((s, r) => s + Number(r.value || 0), 0);
+      if (totalRatio <= 0) throw new Error("Split ratio must be greater than 0.");
+      const rows = selected.map((r) => ({ user_id: r.user_id, amount: Number(((amount * Number(r.value || 0)) / totalRatio).toFixed(2)) }));
+      const total = rows.reduce((s, r) => s + r.amount, 0);
+      const delta = Number((amount - total).toFixed(2));
+      if (Math.abs(delta) >= 0.01 && rows.length) rows[0].amount = Number((rows[0].amount + delta).toFixed(2));
+      return rows;
+    }
   }
   const payer = paidByRows
     .slice()
@@ -937,7 +1408,7 @@ function updatePaymentNetEffectPreview() {
     const netText = net >= 0 ? `is owed ${formatGbp(Math.abs(net))}` : `owes ${formatGbp(Math.abs(net))}`;
     return `<div style="display:flex; justify-content:space-between; gap:8px; border-bottom:1px solid #e5e7eb; padding:4px 0">
       <span><strong>${escapeHtml(m.display_name)}</strong></span>
-      <span>pays ${formatGbp(paid)} | owes ${formatGbp(owes)} -> <strong>${netText}</strong></span>
+      <span>pays ${formatGbp(paid)} | owes ${formatGbp(owes)} <span aria-hidden="true">→</span> <strong>${netText}</strong></span>
     </div>`;
   });
 
@@ -982,7 +1453,7 @@ async function loadDashboardData() {
     const { data: anyPayments, error: anyPaymentsError } = await state.supabase
       .schema("finance_app")
       .from("payments")
-      .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by")
+      .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
       .is("deleted_at", null)
       .order("payment_date", { ascending: false })
       .limit(1);
@@ -998,10 +1469,10 @@ async function loadDashboardData() {
   try {
     renderPayments(payments, new Map());
     try {
-      const payerLabels = await buildPayerLabels(payments);
-      renderPayments(payments, payerLabels);
+      const { payerLabels, paymentDetails } = await buildPaymentMeta(payments);
+      renderPayments(payments, payerLabels, paymentDetails);
     } catch (error) {
-      console.error("Failed to load payer labels:", error);
+      console.error("Failed to load payment meta:", error);
     }
   } catch (error) {
     console.error("Failed to render payments:", error);
@@ -1028,7 +1499,6 @@ async function loadDashboardData() {
   await renderSummaryStats(payments, balanceContext);
   await renderRecurringSection();
   await renderRemindersSection();
-  await renderInsights();
   await renderSyncLogs();
   await loadTitleCategoryIndex();
   updateLoadMoreButton();
@@ -1062,7 +1532,7 @@ async function fetchPaymentsPage({ reset = false } = {}) {
   const { data, error } = await state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by")
+    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
@@ -1086,10 +1556,11 @@ function updateLoadMoreButton() {
   button.classList.toggle("hidden", !state.paymentsHasMore);
 }
 
-async function buildPayerLabels(payments) {
+async function buildPaymentMeta(payments) {
   const paymentIds = payments.map((p) => p.id);
-  if (!paymentIds.length) return new Map();
+  if (!paymentIds.length) return { payerLabels: new Map(), paymentDetails: new Map() };
   const paymentIdSet = new Set(paymentIds);
+  const amountByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount_gbp || 0)]));
 
   const { data: allContributions, error } = await state.supabase
     .schema("finance_app")
@@ -1099,27 +1570,88 @@ async function buildPayerLabels(payments) {
   if (error) throw error;
 
   const contributions = (allContributions || []).filter((c) => paymentIdSet.has(c.payment_id));
+  const { data: allSplits, error: splitsError } = await state.supabase
+    .schema("finance_app")
+    .from("payment_splits")
+    .select("payment_id, user_id, amount")
+    .limit(20000);
+  if (splitsError) throw splitsError;
+  const splits = (allSplits || []).filter((s) => paymentIdSet.has(s.payment_id));
 
   const byPayment = new Map();
   for (const c of contributions) {
     if (!byPayment.has(c.payment_id)) byPayment.set(c.payment_id, []);
     byPayment.get(c.payment_id).push(c);
   }
+  const splitByPayment = new Map();
+  for (const s of splits) {
+    if (!splitByPayment.has(s.payment_id)) splitByPayment.set(s.payment_id, []);
+    splitByPayment.get(s.payment_id).push(s);
+  }
 
   const labels = new Map();
+  const paymentDetails = new Map();
   for (const id of paymentIds) {
-    const rows = (byPayment.get(id) || []).slice().sort((a, b) => Number(b.amount) - Number(a.amount));
-    if (!rows.length) {
+    const contribRows = (byPayment.get(id) || []).slice().sort((a, b) => Number(b.amount) - Number(a.amount));
+    if (!contribRows.length) {
       labels.set(id, "Unknown");
+    } else {
+      const names = contribRows.map((r) => memberNameByUserId(r.user_id));
+      labels.set(id, names.join(", "));
+    }
+
+    const splitRows = (splitByPayment.get(id) || []).slice().sort((a, b) => Number(b.amount) - Number(a.amount));
+    const expectedAmount = Number((amountByPaymentId.get(id) || 0).toFixed(2));
+    const contribTotal = Number(contribRows.reduce((sum, r) => sum + Number(r.amount || 0), 0).toFixed(2));
+    const splitTotal = Number(splitRows.reduce((sum, r) => sum + Number(r.amount || 0), 0).toFixed(2));
+    const reconciles =
+      expectedAmount > 0 &&
+      Math.abs(contribTotal - expectedAmount) <= 0.01 &&
+      Math.abs(splitTotal - expectedAmount) <= 0.01;
+
+    if (!reconciles) {
+      // If rows do not reconcile to payment amount, hide split detail to avoid misleading text.
       continue;
     }
-    const names = rows.map((r) => memberNameByUserId(r.user_id));
-    labels.set(id, names.join(", "));
+
+    const paidLine = contribRows.length
+      ? `Paid by: ${contribRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`).join(", ")}`
+      : "Paid by: Unknown";
+    const splitLine = splitRows.length
+      ? `Split: ${splitRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`).join(", ")}`
+      : "Split: Unknown";
+
+    const netByUser = new Map();
+    for (const r of contribRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) + Number(r.amount || 0));
+    for (const r of splitRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) - Number(r.amount || 0));
+    const creditors = [];
+    const debtors = [];
+    for (const [userId, net] of netByUser.entries()) {
+      if (net > 0.009) creditors.push({ userId, amount: Number(net.toFixed(2)) });
+      if (net < -0.009) debtors.push({ userId, amount: Number(Math.abs(net).toFixed(2)) });
+    }
+    creditors.sort((a, b) => b.amount - a.amount);
+    debtors.sort((a, b) => b.amount - a.amount);
+    const results = [];
+    let i = 0;
+    let j = 0;
+    while (i < debtors.length && j < creditors.length) {
+      const settled = Math.min(debtors[i].amount, creditors[j].amount);
+      if (settled > 0.009) {
+        results.push(`${memberNameByUserId(debtors[i].userId)} owes ${memberNameByUserId(creditors[j].userId)} ${formatGbp(settled)}`);
+      }
+      debtors[i].amount = Number((debtors[i].amount - settled).toFixed(2));
+      creditors[j].amount = Number((creditors[j].amount - settled).toFixed(2));
+      if (debtors[i].amount <= 0.009) i += 1;
+      if (creditors[j].amount <= 0.009) j += 1;
+    }
+    const resultLine = results.length ? `Result: ${results.join(" | ")}` : "Result: No one owes anything";
+    paymentDetails.set(id, { paidLine, splitLine, resultLine });
   }
-  return labels;
+  return { payerLabels: labels, paymentDetails };
 }
 
-function renderPayments(payments, payerLabels) {
+function renderPayments(payments, payerLabels, paymentDetails = new Map()) {
   const target = document.getElementById("payments-list");
   if (!payments.length) {
     target.textContent = "No payments yet.";
@@ -1130,11 +1662,20 @@ function renderPayments(payments, payerLabels) {
     .slice(0, 200)
     .map((p) => {
       const payer = payerLabels?.get(p.id) || memberNameByUserId(p.created_by);
+      const detail = paymentDetails?.get(p.id) || null;
+      const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
+      const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
+      const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
       return `<tr>
         <td>${toDateLabel(p.payment_date)}</td>
-        <td>${escapeHtml(p.title)}</td>
-        <td>${escapeHtml(p.category_key || "-")}</td>
-        <td>${escapeHtml(p.source_type)}</td>
+        <td>
+          <div>${escapeHtml(p.title)}</div>
+          ${detail ? `<div style="font-size:12px; color:#6b7280; margin-top:2px">${escapeHtml(detail.paidLine)}</div>` : ""}
+          ${detail ? `<div style="font-size:12px; color:#6b7280">${escapeHtml(detail.splitLine)}</div>` : ""}
+          ${detail ? `<div style="font-size:12px; color:#4b5563"><strong>${escapeHtml(detail.resultLine)}</strong></div>` : ""}
+        </td>
+        <td>${escapeHtml(categoryLabel)}</td>
+        <td>${escapeHtml(typeLabel)}</td>
         <td>${escapeHtml(payer)}</td>
         <td style="text-align:right">${formatGbp(p.amount_gbp)}</td>
         <td style="text-align:right; white-space:nowrap">
@@ -1176,7 +1717,7 @@ async function openEditPaymentModal(paymentId) {
   const { data, error } = await state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, title, amount, currency_code, payment_date, fx_rate_to_gbp, fx_rate_date, category_key, notes")
+    .select("id, title, amount, currency_code, payment_date, fx_rate_to_gbp, fx_rate_date, category_key, notes, source_type, generated_by_recurring_template_id")
     .eq("id", paymentId)
     .single();
   if (error) {
@@ -1209,6 +1750,10 @@ async function openEditPaymentModal(paymentId) {
   form.is_recurring.checked = false;
   document.getElementById("recurring-fields").classList.add("hidden");
   state.editingPaymentId = paymentId;
+  state.editingPaymentMeta = {
+    source_type: data.source_type || null,
+    recurring_template_id: data.generated_by_recurring_template_id || null
+  };
   document.querySelector("#payment-modal h3").textContent = "Edit Payment";
   document.getElementById("payment-modal").showModal();
   updatePaymentNetEffectPreview();
@@ -1362,14 +1907,16 @@ async function renderRecurringSection() {
 
   target.innerHTML = rows
     .map((r) => {
-      const dates = `${toDateLabel(r.start_date)}${r.end_date ? ` -> ${toDateLabel(r.end_date)}` : ""}`;
+      const dates = `${toDateLabel(r.start_date)}${r.end_date ? ` → ${toDateLabel(r.end_date)}` : ""}`;
       return `<div style="display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid #e5e7eb">
         <span>${escapeHtml(r.title)} (${escapeHtml(r.frequency)}) - ${escapeHtml(dates)} - ${escapeHtml(r.status)}</span>
         <span style="display:flex; gap:6px; align-items:center">
           <strong>${formatGbp(r.amount)}</strong>
+          <button type="button" data-action="edit-recurring" data-template-id="${r.id}">Edit</button>
           <button type="button" data-action="toggle-recurring" data-template-id="${r.id}" data-status="${r.status}">
             ${r.status === "active" ? "Pause" : "Resume"}
           </button>
+          <button type="button" data-action="delete-recurring" data-template-id="${r.id}">Delete</button>
         </span>
       </div>`;
     })
@@ -1392,6 +1939,75 @@ async function renderRecurringSection() {
       showToast(`Recurring template ${nextStatus}.`);
       await renderRecurringSection();
       await renderRemindersSection();
+    });
+  });
+  target.querySelectorAll("button[data-action='edit-recurring']").forEach((btn) => {
+    btn.addEventListener("click", () => openRecurringTemplateModal(btn.getAttribute("data-template-id")));
+  });
+  target.querySelectorAll("button[data-action='delete-recurring']").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const templateId = btn.getAttribute("data-template-id");
+      if (!templateId) return;
+      const ok = window.confirm("Delete this recurring template completely?");
+      if (!ok) return;
+
+      const { error: delContribError } = await state.supabase
+        .schema("finance_app")
+        .from("recurring_template_contributions")
+        .delete()
+        .eq("recurring_template_id", templateId);
+      if (delContribError) {
+        showToast(`Delete failed: ${formatError(delContribError)}`);
+        return;
+      }
+
+      const { error: delSplitsError } = await state.supabase
+        .schema("finance_app")
+        .from("recurring_template_splits")
+        .delete()
+        .eq("recurring_template_id", templateId);
+      if (delSplitsError) {
+        showToast(`Delete failed: ${formatError(delSplitsError)}`);
+        return;
+      }
+
+      const { error: delLogError } = await state.supabase
+        .schema("finance_app")
+        .from("recurring_generation_log")
+        .delete()
+        .eq("recurring_template_id", templateId);
+      if (delLogError) {
+        showToast(`Delete failed: ${formatError(delLogError)}`);
+        return;
+      }
+
+      const { error: unlinkPaymentsError } = await state.supabase
+        .schema("finance_app")
+        .from("payments")
+        .update({
+          generated_by_recurring_template_id: null,
+          due_date_for_generation: null
+        })
+        .eq("generated_by_recurring_template_id", templateId);
+      if (unlinkPaymentsError) {
+        showToast(`Delete failed: ${formatError(unlinkPaymentsError)}`);
+        return;
+      }
+
+      const { error: deleteTemplateError } = await state.supabase
+        .schema("finance_app")
+        .from("recurring_templates")
+        .delete()
+        .eq("id", templateId);
+      if (deleteTemplateError) {
+        showToast(`Delete failed: ${formatError(deleteTemplateError)}`);
+        return;
+      }
+
+      showToast("Recurring template deleted.");
+      await renderRecurringSection();
+      await renderRemindersSection();
+      await renderSyncLogs();
     });
   });
 }
@@ -1503,58 +2119,11 @@ async function renderRemindersSection() {
   target.innerHTML = reminders
     .slice(0, 20)
     .map(
-      (r, idx) => `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid #e5e7eb">
+      (r, idx) => `<div style="padding:6px 0; border-bottom:1px solid #e5e7eb">
         <span>${escapeHtml(r.text)}</span>
-        <span style="display:flex; gap:6px">
-          <button type="button" data-action="pause-from-reminder" data-template-id="${r.template.id}">Pause</button>
-          <button type="button" data-action="extend-reminder" data-template-id="${r.template.id}">+30 days</button>
-        </span>
       </div>`
     )
     .join("");
-
-  target.querySelectorAll("button[data-action='pause-from-reminder']").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const templateId = btn.getAttribute("data-template-id");
-      const template = (data || []).find((x) => x.id === templateId);
-      if (!template) return;
-      const { error } = await state.supabase
-        .schema("finance_app")
-        .from("recurring_templates")
-        .update({ status: "paused" })
-        .eq("id", template.id);
-      if (error) {
-        showToast(`Pause failed: ${formatError(error)}`);
-        return;
-      }
-      showToast(`Paused ${template.title}.`);
-      await renderRecurringSection();
-      await renderRemindersSection();
-    });
-  });
-
-  target.querySelectorAll("button[data-action='extend-reminder']").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const templateId = btn.getAttribute("data-template-id");
-      const template = (data || []).find((x) => x.id === templateId);
-      if (!template) return;
-      const base = template.end_date ? new Date(`${template.end_date}T00:00:00`) : new Date();
-      base.setUTCDate(base.getUTCDate() + 30);
-      const next = base.toISOString().slice(0, 10);
-      const { error } = await state.supabase
-        .schema("finance_app")
-        .from("recurring_templates")
-        .update({ end_date: next })
-        .eq("id", template.id);
-      if (error) {
-        showToast(`Extend failed: ${formatError(error)}`);
-        return;
-      }
-      showToast(`Extended ${template.title} to ${next}.`);
-      await renderRecurringSection();
-      await renderRemindersSection();
-    });
-  });
 }
 
 async function renderSummaryStats(payments, balanceContext) {
@@ -1585,132 +2154,143 @@ async function renderSummaryStats(payments, balanceContext) {
   }
   owesSummary.innerHTML = suggestions
     .slice(0, 3)
-    .map((s) => `<div>${escapeHtml(s.from)} -> ${escapeHtml(s.to)}: <strong>${formatGbp(s.amount)}</strong></div>`)
+    .map((s) => `<div style="padding:4px 0">${escapeHtml(s.from)} <span aria-hidden="true">→</span> ${escapeHtml(s.to)}: <strong>${formatGbp(s.amount)}</strong></div>`)
     .join("");
+}
+
+async function saveSettlementFromForm(form) {
+  if (!state.currentUser || !state.householdId) throw new Error("You must be signed in.");
+  const formData = new FormData(form);
+  const fromUserId = String(formData.get("from_user_id") || "");
+  const toUserId = String(formData.get("to_user_id") || "");
+  const amount = parsePositiveAmount(formData.get("amount"), "Amount");
+  const paymentDate = String(formData.get("payment_date") || "");
+  const notes = String(formData.get("notes") || "").trim() || null;
+  if (!fromUserId || !toUserId) throw new Error("From and To are required.");
+  if (fromUserId === toUserId) throw new Error("From and To must be different members.");
+  if (!paymentDate) throw new Error("Date is required.");
+
+  const fromName = memberNameByUserId(fromUserId);
+  const toName = memberNameByUserId(toUserId);
+  const title = `Settlement: ${fromName} paid ${toName}`;
+
+  const { data: payment, error: paymentError } = await state.supabase
+    .schema("finance_app")
+    .from("payments")
+    .insert({
+      household_id: state.householdId,
+      title,
+      amount,
+      currency_code: "GBP",
+      fx_rate_to_gbp: 1,
+      fx_rate_date: paymentDate,
+      amount_gbp: Number(amount.toFixed(2)),
+      payment_date: paymentDate,
+      category_key: "settlements",
+      notes,
+      source_type: "settlement",
+      created_by: state.currentUser.id
+    })
+    .select("id")
+    .single();
+  if (paymentError) throw paymentError;
+
+  const { error: contributionError } = await state.supabase
+    .schema("finance_app")
+    .from("payment_contributions")
+    .insert({ payment_id: payment.id, user_id: fromUserId, amount: Number(amount.toFixed(2)) });
+  if (contributionError) throw contributionError;
+
+  const { error: splitError } = await state.supabase
+    .schema("finance_app")
+    .from("payment_splits")
+    .insert({ payment_id: payment.id, user_id: toUserId, amount: Number(amount.toFixed(2)) });
+  if (splitError) throw splitError;
 }
 
 async function renderSyncLogs() {
   const target = document.getElementById("sync-log-list");
   if (!target) return;
+  const now = new Date();
+  const cutoff = new Date(now);
+  cutoff.setUTCDate(cutoff.getUTCDate() - 10);
+  const cutoffIso = cutoff.toISOString();
+
   const { data, error } = await state.supabase
     .schema("finance_app")
     .from("recurring_generation_log")
-    .select("id, due_date, status, error_text, created_at, recurring_template_id")
+    .select("id, due_date, status, error_text, created_at, recurring_template_id, payment_id")
+    .gte("created_at", cutoffIso)
     .order("created_at", { ascending: false })
-    .limit(20);
+    .limit(500);
   if (error) {
     target.textContent = `Failed to load sync logs: ${formatError(error)}`;
     return;
   }
   const rows = data || [];
   if (!rows.length) {
-    target.textContent = "No sync logs yet.";
+    target.textContent = "No sync logs in the last 10 days.";
     return;
   }
-  target.innerHTML = rows
+
+  const counts = {
+    created: 0,
+    skipped_exists: 0,
+    failed: 0,
+    other: 0
+  };
+  for (const r of rows) {
+    if (r.status === "created") counts.created += 1;
+    else if (r.status === "skipped_exists") counts.skipped_exists += 1;
+    else if (r.status === "failed") counts.failed += 1;
+    else counts.other += 1;
+  }
+
+  const candidatePaymentIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => (r.status === "created" || r.status === "skipped_exists") && r.payment_id)
+        .map((r) => r.payment_id)
+    )
+  );
+  let missingCount = 0;
+  if (candidatePaymentIds.length) {
+    const { data: payments, error: paymentsError } = await state.supabase
+      .schema("finance_app")
+      .from("payments")
+      .select("id, deleted_at")
+      .in("id", candidatePaymentIds);
+    if (paymentsError) {
+      target.textContent = `Failed to audit generated payments: ${formatError(paymentsError)}`;
+      return;
+    }
+    const paymentMap = new Map((payments || []).map((p) => [p.id, p]));
+    for (const pid of candidatePaymentIds) {
+      const p = paymentMap.get(pid);
+      if (!p || p.deleted_at) missingCount += 1;
+    }
+  }
+
+  const summaryHtml = `
+    <div style="padding:8px 0; border-bottom:1px solid #e5e7eb; margin-bottom:6px">
+      <div style="font-weight:600">Last 10 days recurring status</div>
+      <div style="font-size:13px; color:#6b7280; margin-top:4px">
+        created=${counts.created} • already-existed=${counts.skipped_exists} • failed=${counts.failed}${counts.other ? ` • other=${counts.other}` : ""} • missing/deleted generated payments=${missingCount}
+      </div>
+    </div>
+  `;
+
+  const logsHtml = rows
+    .slice(0, 120)
     .map((r) => {
       const ts = new Date(r.created_at).toLocaleString("en-GB");
       const errorText = r.error_text ? ` - ${escapeHtml(r.error_text)}` : "";
       return `<div style="padding:4px 0; border-bottom:1px solid #e5e7eb">
-        <strong>${escapeHtml(r.status)}</strong> template=${escapeHtml(r.recurring_template_id)} due=${escapeHtml(r.due_date)} at ${escapeHtml(ts)}${errorText}
+        <strong>${escapeHtml(r.status)}</strong> template=${escapeHtml(r.recurring_template_id)} due=${escapeHtml(r.due_date)} at ${escapeHtml(ts)}${r.payment_id ? ` payment=${escapeHtml(r.payment_id)}` : ""}${errorText}
       </div>`;
     })
     .join("");
-}
-
-async function renderInsights() {
-  const target = document.getElementById("insights-list");
-  if (!target) return;
-
-  const { data: allPayments, error: paymentsError } = await state.supabase
-    .schema("finance_app")
-    .from("payments")
-    .select("id, title, amount_gbp, category_key, source_type")
-    .eq("household_id", state.householdId)
-    .is("deleted_at", null)
-    .order("payment_date", { ascending: false })
-    .limit(20000);
-  if (paymentsError) {
-    target.textContent = `Failed to load insights: ${formatError(paymentsError)}`;
-    return;
-  }
-
-  const payments = allPayments || [];
-  if (!payments.length) {
-    target.textContent = "No insights yet.";
-    return;
-  }
-
-  const paymentIdSet = new Set(payments.map((p) => p.id));
-  const { data: allContrib, error: contribError } = await state.supabase
-    .schema("finance_app")
-    .from("payment_contributions")
-    .select("payment_id, user_id, amount")
-    .limit(30000);
-  if (contribError) {
-    target.textContent = `Failed to load insights: ${formatError(contribError)}`;
-    return;
-  }
-  const contrib = (allContrib || []).filter((c) => paymentIdSet.has(c.payment_id));
-
-  const totalsByUser = new Map();
-  for (const c of contrib) {
-    totalsByUser.set(c.user_id, (totalsByUser.get(c.user_id) || 0) + Number(c.amount || 0));
-  }
-  const totalsRows = Array.from(totalsByUser.entries())
-    .map(([userId, total]) => ({ name: memberNameByUserId(userId), total }))
-    .sort((a, b) => b.total - a.total);
-
-  const nonSettlement = payments.filter((p) => p.source_type !== "settlement");
-  const biggest = nonSettlement
-    .slice()
-    .sort((a, b) => Number(b.amount_gbp || 0) - Number(a.amount_gbp || 0))[0];
-
-  const freq = new Map();
-  for (const p of nonSettlement) {
-    const key = (p.title || "").trim().toLowerCase();
-    if (!key) continue;
-    const current = freq.get(key) || { title: p.title, count: 0, total: 0 };
-    current.count += 1;
-    current.total += Number(p.amount_gbp || 0);
-    freq.set(key, current);
-  }
-  const frequentRows = Array.from(freq.values())
-    .sort((a, b) => b.count - a.count || b.total - a.total)
-    .slice(0, 5);
-
-  const totalsHtml = totalsRows.length
-    ? totalsRows
-        .map((r) => `<div style="display:flex; justify-content:space-between"><span>${escapeHtml(r.name)}</span><strong>${formatGbp(r.total)}</strong></div>`)
-        .join("")
-    : "<div>No contributor totals yet.</div>";
-
-  const biggestHtml = biggest
-    ? `<div>${escapeHtml(biggest.title)} <strong>${formatGbp(biggest.amount_gbp)}</strong> <span style="color:#6b7280">(${escapeHtml(biggest.category_key || "other")})</span></div>`
-    : "<div>No spend records yet.</div>";
-
-  const frequentHtml = frequentRows.length
-    ? frequentRows
-        .map((r) => `<div style="display:flex; justify-content:space-between"><span>${escapeHtml(r.title)} (${r.count})</span><strong>${formatGbp(r.total)}</strong></div>`)
-        .join("")
-    : "<div>No recurring spend patterns yet.</div>";
-
-  target.innerHTML = `
-    <div style="display:grid; gap:12px">
-      <div>
-        <h3 style="margin:0 0 6px 0">Total Paid By</h3>
-        ${totalsHtml}
-      </div>
-      <div>
-        <h3 style="margin:0 0 6px 0">Biggest Spend</h3>
-        ${biggestHtml}
-      </div>
-      <div>
-        <h3 style="margin:0 0 6px 0">Most Frequent Spends</h3>
-        ${frequentHtml}
-      </div>
-    </div>
-  `;
+  target.innerHTML = summaryHtml + logsHtml;
 }
 
 function toIsoDateOrNull(rawValue) {
@@ -1732,7 +2312,7 @@ async function savePaymentFromForm(form) {
   }
 
   const formData = new FormData(form);
-  const title = String(formData.get("title") || "").trim();
+  const title = toTitleCaseText(formData.get("title"));
   const amount = parsePositiveAmount(formData.get("amount"), "Amount");
   const currencyCode = String(formData.get("currency_code") || "GBP").toUpperCase();
   const paymentDate = String(formData.get("payment_date") || "");
@@ -1751,6 +2331,9 @@ async function savePaymentFromForm(form) {
 
   const amountGbp = Number((amount * fxRateToGbp).toFixed(2));
   const sourceType = "one_off";
+  if (state.splitMode === "custom" && !updateSplitValidationBanner(true)) {
+    throw new Error("Advanced options are invalid. Check split totals.");
+  }
   const paidByRows = getPaidByAllocations(amount);
   const splitRowsComputed = buildSplitRows(amount, paidByRows);
 
@@ -1787,6 +2370,13 @@ async function savePaymentFromForm(form) {
       .from("payment_splits")
       .insert(splitRowsComputed.map((r) => ({ payment_id: paymentId, user_id: r.user_id, amount: r.amount })));
     if (insSplitsErr) throw insSplitsErr;
+    await maybePropagateRecurringTemplateFromPaymentEdit({
+      title,
+      amount,
+      categoryKey,
+      notes,
+      paymentDate
+    });
   } else {
     const { data: payment, error: paymentError } = await state.supabase
       .schema("finance_app")
@@ -1834,7 +2424,7 @@ async function savePaymentFromForm(form) {
   }
 
   const frequency = String(formData.get("frequency") || "monthly");
-  const startDate = String(formData.get("start_date") || "") || paymentDate;
+  const startDate = paymentDate;
   const endDate = toIsoDateOrNull(String(formData.get("end_date") || ""));
   const reviewDaysBefore = 30;
 
@@ -1860,6 +2450,7 @@ async function savePaymentFromForm(form) {
         end_date: endDate,
         review_days_before: reviewDaysBefore,
         status: "active",
+        last_processed_at: `${paymentDate}T23:59:59.999Z`,
         created_by: state.currentUser.id
       }
     )
@@ -1900,6 +2491,29 @@ async function savePaymentFromForm(form) {
     .from("recurring_template_splits")
     .insert(recurringSplitRows);
   if (recurringSplitError) throw recurringSplitError;
+
+  const { error: linkInitialError } = await state.supabase
+    .schema("finance_app")
+    .from("payments")
+    .update({
+      generated_by_recurring_template_id: template.id,
+      due_date_for_generation: paymentDate
+    })
+    .eq("id", paymentId);
+  if (linkInitialError) throw linkInitialError;
+
+  // Prevent immediate duplicate generation for the same due date:
+  // the one-off payment just saved already represents this cycle.
+  const { error: seedLogError } = await state.supabase
+    .schema("finance_app")
+    .from("recurring_generation_log")
+    .insert({
+      recurring_template_id: template.id,
+      due_date: paymentDate,
+      payment_id: paymentId,
+      status: "skipped_exists"
+    });
+  if (seedLogError) throw seedLogError;
 
   await loadDashboardData();
 }
@@ -1981,7 +2595,7 @@ async function runStartupSummary() {
   if (counts.oneOffCount > 0) parts.push(`${counts.oneOffCount} one-off payment${counts.oneOffCount === 1 ? "" : "s"} added`);
   if (counts.recurringCount > 0) parts.push(`${counts.recurringCount} recurring payment${counts.recurringCount === 1 ? "" : "s"} processed`);
 
-  const windowKey = `${lastOpenedAt}->${nowIso}`;
+  const windowKey = lastOpenedAt;
   const alreadyShown = localStorage.getItem(STORAGE_KEYS.lastSummaryWindow) === windowKey;
 
   if (parts.length > 0 && !alreadyShown) {
@@ -2065,15 +2679,24 @@ async function bootstrap() {
         return;
       }
       const existingRows = Array.from(list.querySelectorAll("tbody tr")).map((tr) => tr.outerHTML).join("");
-      const payerLabels = await buildPayerLabels(more);
+      const { payerLabels, paymentDetails } = await buildPaymentMeta(more);
       const newRows = more
         .map((p) => {
           const payer = payerLabels?.get(p.id) || memberNameByUserId(p.created_by);
+          const detail = paymentDetails?.get(p.id) || null;
+          const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
+          const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
+          const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
           return `<tr>
             <td>${toDateLabel(p.payment_date)}</td>
-            <td>${escapeHtml(p.title)}</td>
-            <td>${escapeHtml(p.category_key || "-")}</td>
-            <td>${escapeHtml(p.source_type)}</td>
+            <td>
+              <div>${escapeHtml(p.title)}</div>
+              ${detail ? `<div style="font-size:12px; color:#6b7280; margin-top:2px">${escapeHtml(detail.paidLine)}</div>` : ""}
+              ${detail ? `<div style="font-size:12px; color:#6b7280">${escapeHtml(detail.splitLine)}</div>` : ""}
+              ${detail ? `<div style="font-size:12px; color:#4b5563"><strong>${escapeHtml(detail.resultLine)}</strong></div>` : ""}
+            </td>
+            <td>${escapeHtml(categoryLabel)}</td>
+            <td>${escapeHtml(typeLabel)}</td>
             <td>${escapeHtml(payer)}</td>
             <td style="text-align:right">${formatGbp(p.amount_gbp)}</td>
           </tr>`;
@@ -2149,9 +2772,8 @@ async function bootstrap() {
   state.syncResult = result;
   localStorage.setItem(STORAGE_KEYS.lastSyncResult, JSON.stringify(result));
   document.getElementById("sync-status").textContent = syncResultLabel(result);
-
-  if (result.generated > 0 || result.failed > 0) {
-    showToast(`Recurring sync complete: ${result.generated} added, ${result.failed} failed.`);
+  if (result.failed > 0) {
+    showToast(`Recurring sync had ${result.failed} failed item${result.failed === 1 ? "" : "s"}.`);
   }
 
   await loadDashboardData();
