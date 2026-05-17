@@ -18,6 +18,8 @@ const state = {
   paymentsPageSize: 20,
   paymentsOffset: 0,
   paymentsHasMore: false,
+  latestSettlementDate: null,
+  showSettledItems: false,
   editingPaymentId: null,
   editingPaymentMeta: null,
   titleCategoryIndex: [],
@@ -25,7 +27,9 @@ const state = {
   splitMode: "preset_you_equal",
   advancedOwesMode: "percentage",
   editingTemplateId: null,
-  editingTemplateBefore: null
+  editingTemplateBefore: null,
+  owesMessageKey: null,
+  owesMessageText: null
 };
 
 const GBP_FORMAT = new Intl.NumberFormat("en-GB", {
@@ -44,9 +48,70 @@ const NO_OUTSTANDING_MESSAGES = [
   "All clear. The household books are shipshape and calm as a glassy bay.",
   "No balances pending. The manatees are cruising smoothly with every pound accounted for."
 ];
+const SMALL_OUTSTANDING_MESSAGES = [
+  "Minor wake only: the manatee books are nearly level, just a pocket ripple to settle.",
+  "Small trim needed: this is a light manatee imbalance in otherwise calm waters.",
+  "A tiny drift off even keel: the pod only needs a quick nudge to rebalance.",
+  "Brief Budget-note moment: a small adjustment and the manatee ledger is tidy again.",
+  "Harbour-level wobble: this is a small financial ripple, not a storm.",
+  "Teacup tide only: the manatees are nearly square with just a tiny nudge left.",
+  "Gentle ripple in the ledger: a small settle and we're back on even keel.",
+  "Low-draft imbalance: this one barely lifts the harbour markers.",
+  "A penny-level wobble: the pod is almost perfectly trimmed.",
+  "Shallow-water drift: small imbalance, quick correction."
+];
+const MEDIUM_OUTSTANDING_MESSAGES = [
+  "Mid-tide mismatch: the manatee finances need a proper but manageable correction.",
+  "Noticeable list to port: a medium ledger swell is running through the pod.",
+  "Chancellor-briefing territory: the books are stable, but this medium gap needs action.",
+  "A steady cross-current: medium imbalance detected across Manatee Towers.",
+  "Not rough seas, but whitecaps: medium financial drift to settle up.",
+  "Mid-channel sway: the manatee books need a tidy medium rebalance.",
+  "Noticeable chop on the balance sheet: manageable, but worth settling now.",
+  "Half-mast warning: medium mismatch across the pod accounts.",
+  "Fiscal crosswind ahead: medium adjustment required to hold course.",
+  "A proper roll in the hull: not severe, but definitely settlement weather."
+];
+const LARGE_OUTSTANDING_MESSAGES = [
+  "Heavy swell on the ledger: this large manatee gap needs a decisive settle-up run.",
+  "Decks are tilting: a large imbalance is pushing the pod off course.",
+  "Red box moment: this is a substantial budget wave in manatee waters.",
+  "Strong headwind in the harbour accounts: large mismatch, time to rebalance.",
+  "Big wake behind this one: the pod should correct this large gap soon.",
+  "Heavy seas on this leg: large imbalance needs a firm correction.",
+  "The ledger is listing: substantial gap, settle-up recommended promptly.",
+  "Full-crew manoeuvre: this is a big wake in manatee finances.",
+  "Strong current through the accounts: large mismatch pushing us off line.",
+  "Budget barometer rising: this one's a chunky rebalancing job."
+];
+const CRISIS_OUTSTANDING_MESSAGES = [
+  "Manatee fiscal storm warning: this is full-blown imbalance weather.",
+  "Code Coral Red: the pod has entered exaggerated financial-crisis seas.",
+  "All hands on deck: this ledger gap is a major manatee money squall.",
+  "Treasury panic buoy deployed: crisis-level mismatch across the lagoon books.",
+  "Sirens over the marina: this is a top-tier manatee budget emergency.",
+  "Manatee market panic: crisis-grade imbalance, immediate action stations.",
+  "Ledger hurricane warning: this is deep-red settlement territory.",
+  "All buoys flashing: major fiscal squall across the pod.",
+  "Treasury distress signal received: top-level imbalance emergency.",
+  "Catastrophic wake event: this is a full manatee money crisis."
+];
 
 function showToast(message) {
   const toast = document.getElementById("toast");
+  const openDialog = document.querySelector("dialog[open]");
+  if (openDialog) {
+    let dialogToast = openDialog.querySelector(".dialog-toast");
+    if (!dialogToast) {
+      dialogToast = document.createElement("div");
+      dialogToast.className = "dialog-toast";
+      openDialog.appendChild(dialogToast);
+    }
+    dialogToast.textContent = message;
+    dialogToast.classList.remove("hidden");
+    window.setTimeout(() => dialogToast.classList.add("hidden"), 5000);
+    return;
+  }
   toast.textContent = message;
   toast.classList.remove("hidden");
   window.setTimeout(() => toast.classList.add("hidden"), 5000);
@@ -78,9 +143,31 @@ function formatError(error) {
   return parts.join(" | ") || JSON.stringify(error);
 }
 
+function toDisplayFirstName(nameLike) {
+  const raw = String(nameLike || "").trim();
+  if (!raw) return "Unknown";
+  if (raw.includes("@")) {
+    const local = raw.split("@")[0].trim();
+    if (!local) return "Unknown";
+    const token = local.split(/[.\-_+\s]+/).filter(Boolean)[0] || local;
+    return token.charAt(0).toUpperCase() + token.slice(1);
+  }
+  return raw.split(/\s+/).filter(Boolean)[0] || "Unknown";
+}
+
 function randomNoOutstandingMessage() {
   const idx = Math.floor(Math.random() * NO_OUTSTANDING_MESSAGES.length);
   return NO_OUTSTANDING_MESSAGES[idx] || "All square. No settlements needed.";
+}
+
+function randomOutstandingMessage(maxSettlementAmount) {
+  const amount = Number(maxSettlementAmount || 0);
+  let pool = CRISIS_OUTSTANDING_MESSAGES;
+  if (amount < 100) pool = SMALL_OUTSTANDING_MESSAGES;
+  else if (amount < 500) pool = MEDIUM_OUTSTANDING_MESSAGES;
+  else if (amount < 1000) pool = LARGE_OUTSTANDING_MESSAGES;
+  const idx = Math.floor(Math.random() * pool.length);
+  return pool[idx] || "Outstanding balance detected. Settle-up recommended.";
 }
 
 function setSettleUpEnabled(enabled) {
@@ -268,6 +355,7 @@ function setupModals() {
   });
   document.getElementById("settlement-form")?.from_user_id?.addEventListener("change", () => updateSettlementDirectionPreview());
   document.getElementById("settlement-form")?.to_user_id?.addEventListener("change", () => updateSettlementDirectionPreview());
+  document.getElementById("settlement-form")?.amount?.addEventListener("input", () => updateSettlementSaveState());
   document.getElementById("reverse-settlement-direction")?.addEventListener("click", () => {
     const form = document.getElementById("settlement-form");
     if (!form) return;
@@ -276,6 +364,7 @@ function setupModals() {
     form.from_user_id.value = to;
     form.to_user_id.value = from;
     updateSettlementDirectionPreview();
+    updateSettlementSaveState();
   });
 
   document.getElementById("recurring-template-form")?.addEventListener("submit", async (event) => {
@@ -360,10 +449,50 @@ function computeNextDueDateForTemplate(template, now = new Date()) {
   return due.toISOString().slice(0, 10);
 }
 
+function computeNextNDueDates(template, count = 5, now = new Date()) {
+  const dates = [];
+  if (!template?.start_date || template?.status !== "active" || count <= 0) return dates;
+  const start = new Date(`${template.start_date}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return dates;
+  const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
+  let cursorIso = computeNextDueDateForTemplate(template, now);
+  if (!cursorIso) return dates;
+
+  let guard = 0;
+  while (dates.length < count && guard < 60 && cursorIso) {
+    guard += 1;
+    dates.push(cursorIso);
+    const cursorDate = new Date(`${cursorIso}T00:00:00Z`);
+    let nextDate = null;
+
+    if (template.frequency === "annual") {
+      nextDate = new Date(Date.UTC(cursorDate.getUTCFullYear() + 1, cursorDate.getUTCMonth(), cursorDate.getUTCDate()));
+    } else {
+      const day = Number(template.day_of_month || start.getUTCDate() || 1);
+      let year = cursorDate.getUTCFullYear();
+      let month = cursorDate.getUTCMonth() + 1;
+      if (month > 11) {
+        month = 0;
+        year += 1;
+      }
+      const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+      nextDate = new Date(Date.UTC(year, month, Math.min(day, lastDay)));
+    }
+
+    if (!nextDate || Number.isNaN(nextDate.getTime())) break;
+    if (nextDate < start) nextDate = start;
+    if (end && nextDate > end) break;
+    cursorIso = nextDate.toISOString().slice(0, 10);
+    if (dates[dates.length - 1] === cursorIso) break;
+  }
+  return dates;
+}
+
 function renderRecurringImpactPreview() {
   const target = document.getElementById("recurring-impact");
+  const nextDatesTarget = document.getElementById("recurring-next-dates");
   const form = document.getElementById("recurring-template-form");
-  if (!target || !form || !state.editingTemplateBefore) return;
+  if (!target || !nextDatesTarget || !form || !state.editingTemplateBefore) return;
   const before = state.editingTemplateBefore;
   const after = {
     ...before,
@@ -388,6 +517,22 @@ function renderRecurringImpactPreview() {
     <div style="display:grid; gap:4px">
       <div>Next date: <strong>${nextBefore ? toDateLabel(nextBefore) : "None"}</strong> <span aria-hidden="true">→</span> <strong>${nextAfter ? toDateLabel(nextAfter) : "None"}</strong>${dateChanged ? ' <span style="color:#b45309">(changed)</span>' : ""}</div>
       <div>Amount: <strong>${formatGbp(amountBefore)}</strong> <span aria-hidden="true">→</span> <strong>${formatGbp(amountAfter)}</strong>${amountChanged ? ' <span style="color:#b45309">(changed)</span>' : ""}</div>
+    </div>
+  `;
+
+  const nextFive = computeNextNDueDates(after, 5);
+  if (after.status !== "active") {
+    nextDatesTarget.innerHTML = `<div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div><div style="color:#6b7280">Recurring payment is paused.</div>`;
+    return;
+  }
+  if (!nextFive.length) {
+    nextDatesTarget.innerHTML = `<div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div><div style="color:#6b7280">No upcoming dates.</div>`;
+    return;
+  }
+  nextDatesTarget.innerHTML = `
+    <div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div>
+    <div style="display:grid; gap:4px">
+      ${nextFive.map((d) => `<div>${toDateLabel(d)}</div>`).join("")}
     </div>
   `;
 }
@@ -533,7 +678,7 @@ function populateSettlementPartyOptions() {
   const form = document.getElementById("settlement-form");
   if (!form) return;
   const options = state.members
-    .map((m) => `<option value="${escapeHtml(m.user_id)}">${escapeHtml(m.display_name)}</option>`)
+    .map((m) => `<option value="${escapeHtml(m.user_id)}">${escapeHtml(memberNameByUserId(m.user_id))}</option>`)
     .join("");
   form.from_user_id.innerHTML = options;
   form.to_user_id.innerHTML = options;
@@ -550,26 +695,43 @@ function updateSettlementDirectionPreview() {
   preview.textContent = `${fromName} → ${toName}`;
 }
 
+function updateSettlementSaveState() {
+  const form = document.getElementById("settlement-form");
+  const saveBtn = document.getElementById("save-settlement");
+  if (!form || !saveBtn) return;
+  const fromId = String(form.from_user_id.value || "");
+  const toId = String(form.to_user_id.value || "");
+  const amount = Number(form.amount?.value || 0);
+  const canSave = Boolean(fromId) && Boolean(toId) && fromId !== toId && Number.isFinite(amount) && amount > 0;
+  saveBtn.disabled = !canSave;
+}
+
 async function getTopSettlementSuggestion() {
   const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
     p_household_id: state.householdId
   });
   if (error) throw error;
-  const rows = (data || []).map((r) => ({
-    name: r.display_name || memberNameByUserId(r.user_id),
-    net: Number(r.net || 0)
-  }));
-  const suggestions = buildSettlementSuggestions(rows);
-  if (!suggestions.length) return null;
-  const top = suggestions[0];
-  const from = state.members.find((m) => m.display_name === top.from);
-  const to = state.members.find((m) => m.display_name === top.to);
-  if (!from || !to) return null;
+  const creditors = [];
+  const debtors = [];
+  for (const r of data || []) {
+    const net = Number(r.net || 0);
+    if (net > 0.009) creditors.push({ userId: r.user_id, amount: Number(net.toFixed(2)) });
+    if (net < -0.009) debtors.push({ userId: r.user_id, amount: Number(Math.abs(net).toFixed(2)) });
+  }
+  creditors.sort((a, b) => b.amount - a.amount);
+  debtors.sort((a, b) => b.amount - a.amount);
+  if (!creditors.length || !debtors.length) return null;
+  const from = debtors[0];
+  const to = creditors[0];
+  const amount = Number(Math.min(from.amount, to.amount).toFixed(2));
+  if (amount <= 0) return null;
+  const fromName = memberNameByUserId(from.userId);
+  const toName = memberNameByUserId(to.userId);
   return {
-    fromUserId: from.user_id,
-    toUserId: to.user_id,
-    amount: top.amount,
-    text: `${top.from} owes ${top.to} ${formatGbp(top.amount)}`
+    fromUserId: from.userId,
+    toUserId: to.userId,
+    amount,
+    text: `${fromName} owes ${toName} ${formatGbp(amount)}`
   };
 }
 
@@ -593,19 +755,26 @@ async function openSettlementModal(prefill = null) {
       form.from_user_id.value = state.currentUser.id;
       form.to_user_id.value = other.user_id;
     }
-    try {
-      const suggested = await getTopSettlementSuggestion();
-      if (suggested) {
-        form.from_user_id.value = suggested.fromUserId;
-        form.to_user_id.value = suggested.toUserId;
-        form.amount.value = Number(suggested.amount || 0).toFixed(2);
-        if (hint) hint.textContent = `Outstanding: ${suggested.text}`;
-      }
-    } catch (error) {
-      console.error("Failed to prefill settlement suggestion:", error);
+  } else if (!form.from_user_id.value || !form.to_user_id.value) {
+    const [first, second] = state.members || [];
+    if (first && second) {
+      form.from_user_id.value = first.user_id;
+      form.to_user_id.value = second.user_id;
     }
   }
+  try {
+    const suggested = await getTopSettlementSuggestion();
+    if (suggested) {
+      form.from_user_id.value = suggested.fromUserId;
+      form.to_user_id.value = suggested.toUserId;
+      form.amount.value = Number(suggested.amount || 0).toFixed(2);
+      if (hint) hint.textContent = `Outstanding: ${suggested.text}`;
+    }
+  } catch (error) {
+    console.error("Failed to prefill settlement suggestion:", error);
+  }
   updateSettlementDirectionPreview();
+  updateSettlementSaveState();
   modal.showModal();
 }
 
@@ -637,22 +806,23 @@ function renderSplitPresets() {
     return;
   }
   const me = memberNameByUserId(state.currentUser.id);
+  const otherName = memberNameByUserId(other.user_id);
   target.innerHTML = `
     <label class="split-preset">
       <input type="radio" name="split_mode" value="preset_you_equal" checked />
-      <span class="split-preset-label"><span class="split-preset-title">You paid, split equally</span><span class="split-preset-sub">${escapeHtml(other.display_name)} owes half</span></span>
+      <span class="split-preset-label"><span class="split-preset-title">You paid, split equally</span><span class="split-preset-sub">${escapeHtml(otherName)} owes half</span></span>
     </label>
     <label class="split-preset">
       <input type="radio" name="split_mode" value="preset_you_full" />
-      <span class="split-preset-label"><span class="split-preset-title">You paid, ${escapeHtml(other.display_name)} owes all</span><span class="split-preset-sub">${escapeHtml(me)} owes none</span></span>
+      <span class="split-preset-label"><span class="split-preset-title">You paid, ${escapeHtml(otherName)} owes all</span><span class="split-preset-sub">${escapeHtml(me)} owes none</span></span>
     </label>
     <label class="split-preset">
       <input type="radio" name="split_mode" value="preset_other_equal" />
-      <span class="split-preset-label"><span class="split-preset-title">${escapeHtml(other.display_name)} paid, split equally</span><span class="split-preset-sub">You owe half</span></span>
+      <span class="split-preset-label"><span class="split-preset-title">${escapeHtml(otherName)} paid, split equally</span><span class="split-preset-sub">You owe half</span></span>
     </label>
     <label class="split-preset">
       <input type="radio" name="split_mode" value="preset_other_full" />
-      <span class="split-preset-label"><span class="split-preset-title">${escapeHtml(other.display_name)} paid, you owe all</span><span class="split-preset-sub">${escapeHtml(other.display_name)} owes none</span></span>
+      <span class="split-preset-label"><span class="split-preset-title">${escapeHtml(otherName)} paid, you owe all</span><span class="split-preset-sub">${escapeHtml(otherName)} owes none</span></span>
     </label>
     <label class="split-preset">
       <input type="radio" name="split_mode" value="custom" />
@@ -1199,6 +1369,12 @@ function categoryIcon(categoryKey) {
     utilities: "🔌",
     internet_phone: "📶",
     groceries: "🛒",
+    shopping: "🛍️",
+    dining: "🍽️",
+    subscriptions: "📺",
+    education: "🎓",
+    entertainment: "🎬",
+    healthcare: "🩺",
     transport: "🚗",
     settlements: "💷",
     recurring: "🔁",
@@ -1342,6 +1518,7 @@ async function loadCategoryOptions() {
 
   const ordered = categories
     .slice()
+    .filter((c) => String(c.key || "").toLowerCase() !== "settlements")
     .sort((a, b) => {
       const ua = usage.get(a.key) || 0;
       const ub = usage.get(b.key) || 0;
@@ -1361,7 +1538,8 @@ async function loadCategoryOptions() {
   }
 }
 
-function renderPaidByRows(prefill = null) {
+function renderPaidByRows(prefill = null, options = {}) {
+  const { forceCustom = true, splitMode = null, splitPrefill = null } = options || {};
   const target = document.getElementById("paid-by-rows");
   if (!state.members.length) {
     if (target) target.textContent = "No members found.";
@@ -1384,7 +1562,7 @@ function renderPaidByRows(prefill = null) {
         return `<div style="display:grid; grid-template-columns: 1fr 110px; gap:8px; align-items:center; margin-bottom:6px">
           <label class="inline">
             <input type="checkbox" data-paid-by-user="${m.user_id}" ${checked} />
-            ${escapeHtml(m.display_name)}
+            ${escapeHtml(memberNameByUserId(m.user_id))}
           </label>
           <input type="number" min="0" max="100" step="0.01" data-paid-by-pct="${m.user_id}" value="${pct}" />
         </div>`;
@@ -1406,14 +1584,67 @@ function renderPaidByRows(prefill = null) {
   if (!prefill?.length) {
     setDefaultSplitPreset();
   } else {
-    state.splitMode = "custom";
-    const advanced = document.getElementById("advanced-split-fields");
-    if (advanced) advanced.classList.remove("hidden");
-    const customRadio = document.querySelector("input[name='split_mode'][value='custom']");
-    if (customRadio) customRadio.checked = true;
+    if (splitMode && !forceCustom) {
+      state.splitMode = splitMode;
+      const modeRadio = document.querySelector(`input[name='split_mode'][value='${splitMode}']`);
+      if (modeRadio) modeRadio.checked = true;
+      if (splitMode === "custom") {
+        const owesMode = document.getElementById("advanced-owes-mode");
+        if (owesMode) owesMode.value = "fixed";
+        state.advancedOwesMode = "fixed";
+        renderSplitRows(splitPrefill || null);
+      }
+      applySplitModeSelection();
+    } else {
+      state.splitMode = "custom";
+      const advanced = document.getElementById("advanced-split-fields");
+      if (advanced) advanced.classList.remove("hidden");
+      const customRadio = document.querySelector("input[name='split_mode'][value='custom']");
+      if (customRadio) customRadio.checked = true;
+    }
   }
   updateSplitValidationBanner(false);
   updatePaymentNetEffectPreview();
+}
+
+function inferSplitPresetForEdit(contribRows, splitRows, totalAmount) {
+  if (state.members.length !== 2 || !state.currentUser?.id) return { mode: "custom" };
+  const other = getOtherMember();
+  if (!other) return { mode: "custom" };
+  const meId = state.currentUser.id;
+  const otherId = other.user_id;
+  const total = Number(totalAmount || 0);
+  if (!total || total <= 0) return { mode: "custom" };
+
+  const contribByUser = new Map();
+  const splitByUser = new Map();
+  for (const r of contribRows || []) contribByUser.set(r.user_id, Number(r.amount || 0));
+  for (const r of splitRows || []) splitByUser.set(r.user_id, Number(r.amount || 0));
+
+  const paidMe = Number((contribByUser.get(meId) || 0).toFixed(2));
+  const paidOther = Number((contribByUser.get(otherId) || 0).toFixed(2));
+  const splitMe = Number((splitByUser.get(meId) || 0).toFixed(2));
+  const splitOther = Number((splitByUser.get(otherId) || 0).toFixed(2));
+  const tol = 0.02;
+  const half = Number((total / 2).toFixed(2));
+
+  const payerId = paidMe >= paidOther ? meId : otherId;
+  const payerIsMe = payerId === meId;
+  const payerSplit = payerIsMe ? splitMe : splitOther;
+  const otherSplit = payerIsMe ? splitOther : splitMe;
+
+  const paidBySingle =
+    (Math.abs(paidMe - total) <= tol && Math.abs(paidOther) <= tol) ||
+    (Math.abs(paidOther - total) <= tol && Math.abs(paidMe) <= tol);
+  if (!paidBySingle) return { mode: "custom" };
+
+  const isEqual = Math.abs(splitMe - half) <= tol && Math.abs(splitOther - half) <= tol;
+  if (isEqual) return { mode: payerIsMe ? "preset_you_equal" : "preset_other_equal" };
+
+  const isOtherOwesAll = Math.abs(otherSplit - total) <= tol && Math.abs(payerSplit) <= tol;
+  if (isOtherOwesAll) return { mode: payerIsMe ? "preset_you_full" : "preset_other_full" };
+
+  return { mode: "custom" };
 }
 
 function renderSplitRows(prefill = null) {
@@ -1450,7 +1681,7 @@ function renderSplitRows(prefill = null) {
       const value = selected.get(m.user_id) || 0;
       const checked = selected.has(m.user_id) ? "checked" : "";
       return `<div class="advanced-row">
-        <label class="inline"><input type="checkbox" data-split-user="${m.user_id}" ${checked} /> ${escapeHtml(m.display_name)}</label>
+        <label class="inline"><input type="checkbox" data-split-user="${m.user_id}" ${checked} /> ${escapeHtml(memberNameByUserId(m.user_id))}</label>
         <input type="number" step="0.01" min="0" data-split-value="${m.user_id}" value="${value}" placeholder="${suffix}" />
       </div>`;
     })
@@ -1658,9 +1889,10 @@ function updatePaymentNetEffectPreview() {
   const amountRaw = document.querySelector("#payment-form input[name='amount']")?.value;
   const amount = Number(amountRaw || 0);
   if (!Number.isFinite(amount) || amount <= 0 || !state.members.length) {
-    target.textContent = "Enter amount and payer split to see net effect.";
+    target.classList.add("hidden");
     return;
   }
+  target.classList.remove("hidden");
 
   const paidByRows = getPaidByAllocationsSafe(amount);
   if (!paidByRows.length) {
@@ -1669,55 +1901,62 @@ function updatePaymentNetEffectPreview() {
   }
   const splitRows = buildSplitRows(amount, paidByRows);
 
-  const paidMap = new Map();
-  const owedMap = new Map();
-  const netMap = new Map();
-  for (const r of paidByRows) paidMap.set(r.user_id, (paidMap.get(r.user_id) || 0) + Number(r.amount || 0));
-  for (const r of splitRows) owedMap.set(r.user_id, (owedMap.get(r.user_id) || 0) + Number(r.amount || 0));
+  const paidLine = paidByRows.length
+    ? `Paid by: ${paidByRows
+        .slice()
+        .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0))
+        .map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`)
+        .join(", ")}`
+    : "Paid by: Unknown";
+  const splitLine = splitRows.length
+    ? `Split: ${splitRows
+        .slice()
+        .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0))
+        .map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`)
+        .join(", ")}`
+    : "Split: Unknown";
 
-  const lines = state.members.map((m) => {
-    const paid = Number((paidMap.get(m.user_id) || 0).toFixed(2));
-    const owes = Number((owedMap.get(m.user_id) || 0).toFixed(2));
-    const net = Number((paid - owes).toFixed(2));
-    netMap.set(m.user_id, net);
-    const netText = net >= 0 ? `is owed ${formatGbp(Math.abs(net))}` : `owes ${formatGbp(Math.abs(net))}`;
-    return `<div style="display:flex; justify-content:space-between; gap:8px; border-bottom:1px solid #e5e7eb; padding:4px 0">
-      <span><strong>${escapeHtml(m.display_name)}</strong></span>
-      <span>pays ${formatGbp(paid)} | owes ${formatGbp(owes)} <span aria-hidden="true">→</span> <strong>${netText}</strong></span>
-    </div>`;
-  });
+  const netByUser = new Map();
+  for (const m of state.members) netByUser.set(m.user_id, 0);
+  for (const r of paidByRows) netByUser.set(r.user_id, Number((netByUser.get(r.user_id) + Number(r.amount || 0)).toFixed(2)));
+  for (const r of splitRows) netByUser.set(r.user_id, Number((netByUser.get(r.user_id) - Number(r.amount || 0)).toFixed(2)));
 
-  let headline = "No balance change.";
-  if (state.members.length === 2) {
-    const [m1, m2] = state.members;
-    const n1 = Number((netMap.get(m1.user_id) || 0).toFixed(2));
-    const n2 = Number((netMap.get(m2.user_id) || 0).toFixed(2));
-    if (n1 > 0.009 && n2 < -0.009) {
-      headline = `${escapeHtml(m2.display_name)} owes ${escapeHtml(m1.display_name)} ${formatGbp(Math.abs(n1))}`;
-    } else if (n2 > 0.009 && n1 < -0.009) {
-      headline = `${escapeHtml(m1.display_name)} owes ${escapeHtml(m2.display_name)} ${formatGbp(Math.abs(n2))}`;
-    }
-  } else {
-    const creditors = [];
-    const debtors = [];
-    for (const m of state.members) {
-      const net = Number((netMap.get(m.user_id) || 0).toFixed(2));
-      if (net > 0.009) creditors.push(`${escapeHtml(m.display_name)} +${formatGbp(net)}`);
-      if (net < -0.009) debtors.push(`${escapeHtml(m.display_name)} -${formatGbp(Math.abs(net))}`);
-    }
-    if (creditors.length || debtors.length) headline = `${debtors.join(", ")} | ${creditors.join(", ")}`;
+  const creditors = [];
+  const debtors = [];
+  for (const m of state.members) {
+    const net = Number((netByUser.get(m.user_id) || 0).toFixed(2));
+    if (net > 0.009) creditors.push({ userId: m.user_id, amount: net });
+    if (net < -0.009) debtors.push({ userId: m.user_id, amount: Math.abs(net) });
   }
 
+  creditors.sort((a, b) => b.amount - a.amount);
+  debtors.sort((a, b) => b.amount - a.amount);
+  const results = [];
+  let i = 0;
+  let j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const settled = Math.min(debtors[i].amount, creditors[j].amount);
+    if (settled > 0.009) {
+      results.push(`${memberNameByUserId(debtors[i].userId)} owes ${memberNameByUserId(creditors[j].userId)} ${formatGbp(settled)}`);
+    }
+    debtors[i].amount = Number((debtors[i].amount - settled).toFixed(2));
+    creditors[j].amount = Number((creditors[j].amount - settled).toFixed(2));
+    if (debtors[i].amount <= 0.009) i += 1;
+    if (creditors[j].amount <= 0.009) j += 1;
+  }
+  const resultLine = results.length ? `Result: ${results.join(" | ")}` : "Result: No one owes anything";
+
   target.innerHTML = `
-    <div style="font-weight:600; margin-bottom:4px">Net Effect</div>
-    <div style="margin-bottom:6px"><strong>${headline}</strong></div>
-    ${lines.join("")}
+    <div class="net-effect-title">Net Effect</div>
+    <div class="net-effect-meta">${escapeHtml(paidLine)}</div>
+    <div class="net-effect-meta">${escapeHtml(splitLine)}</div>
+    <div class="net-effect-result">${escapeHtml(resultLine)}</div>
   `;
 }
 
 function memberNameByUserId(userId) {
   const member = state.members.find((m) => m.user_id === userId);
-  return member?.display_name || "Unknown";
+  return toDisplayFirstName(member?.display_name || "");
 }
 
 async function loadDashboardData() {
@@ -1748,13 +1987,8 @@ async function loadDashboardData() {
     } catch (error) {
       console.error("Failed to load hypothetical rows:", error);
     }
-    renderPayments(payments, new Map(), new Map(), hypotheticalRows);
-    try {
-      const { payerLabels, paymentDetails } = await buildPaymentMeta(payments);
-      renderPayments(payments, payerLabels, paymentDetails, hypotheticalRows);
-    } catch (error) {
-      console.error("Failed to load payment meta:", error);
-    }
+    const { payerLabels, paymentDetails } = await buildPaymentMeta(payments);
+    renderPayments(payments, payerLabels, paymentDetails, hypotheticalRows);
   } catch (error) {
     console.error("Failed to render payments:", error);
     document.getElementById("payments-list").textContent = `Failed to render payments: ${formatError(error)}`;
@@ -1775,7 +2009,6 @@ async function loadDashboardData() {
       }
     }
   }
-  renderRecurringPlaceholder();
   await renderSummaryStats(payments, balanceContext);
   await renderRecurringSection();
   await renderSyncLogs();
@@ -1804,23 +2037,58 @@ async function loadTitleCategoryIndex() {
 async function fetchPaymentsPage({ reset = false } = {}) {
   if (reset) {
     state.paymentsOffset = 0;
+    state.showSettledItems = false;
+  }
+
+  let defaultFromDate = null;
+  if (reset) {
+    const { data: latestSettlement, error: latestSettlementError } = await state.supabase
+      .schema("finance_app")
+      .from("payments")
+      .select("payment_date")
+      .eq("household_id", state.householdId)
+      .is("deleted_at", null)
+      .eq("source_type", "settlement")
+      .order("payment_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestSettlementError) throw latestSettlementError;
+    defaultFromDate = latestSettlement?.payment_date || null;
+    state.latestSettlementDate = defaultFromDate;
   }
 
   const from = state.paymentsOffset;
   const to = state.paymentsOffset + state.paymentsPageSize - 1;
-  const { data, error } = await state.supabase
+  let query = state.supabase
     .schema("finance_app")
     .from("payments")
     .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .range(from, to);
+    .order("created_at", { ascending: false });
+  const cutoff = state.latestSettlementDate || defaultFromDate;
+  if (!state.showSettledItems && cutoff) {
+    query = query.gte("payment_date", cutoff);
+  }
+  const { data, error } = await query.range(from, to);
   if (error) throw error;
 
   const rows = data || [];
-  state.paymentsHasMore = rows.length === state.paymentsPageSize;
+  if (!state.showSettledItems && cutoff) {
+    const { count, error: olderCountError } = await state.supabase
+      .schema("finance_app")
+      .from("payments")
+      .select("id", { count: "exact", head: true })
+      .eq("household_id", state.householdId)
+      .is("deleted_at", null)
+      .lt("payment_date", cutoff);
+    if (olderCountError) throw olderCountError;
+    state.paymentsHasMore = Number(count || 0) > 0;
+  } else {
+    state.paymentsHasMore = rows.length === state.paymentsPageSize;
+  }
   if (!reset) {
     state.paymentsOffset += rows.length;
   } else {
@@ -1832,15 +2100,18 @@ async function fetchPaymentsPage({ reset = false } = {}) {
 async function fetchLoadedPayments() {
   const loaded = Math.max(0, state.paymentsOffset);
   if (!loaded) return [];
-  const { data, error } = await state.supabase
+  let query = state.supabase
     .schema("finance_app")
     .from("payments")
     .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .range(0, loaded - 1);
+    .order("created_at", { ascending: false });
+  if (!state.showSettledItems && state.latestSettlementDate) {
+    query = query.gte("payment_date", state.latestSettlementDate);
+  }
+  const { data, error } = await query.range(0, loaded - 1);
   if (error) throw error;
   return data || [];
 }
@@ -1848,6 +2119,7 @@ async function fetchLoadedPayments() {
 function updateLoadMoreButton() {
   const button = document.getElementById("load-more-payments");
   if (!button) return;
+  button.textContent = state.showSettledItems ? "Show More" : "Show Settled Expenses";
   button.classList.toggle("hidden", !state.paymentsHasMore);
 }
 
@@ -1966,7 +2238,7 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypot
       const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
       const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
       const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
-      const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Hypothetical from recurring payment</div>` : ""}
+      const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Projected from recurring payment</div>` : ""}
           ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
           ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
           ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
@@ -2052,12 +2324,26 @@ async function openEditPaymentModal(paymentId) {
     .from("payment_contributions")
     .select("user_id, amount")
     .eq("payment_id", paymentId);
+  const { data: splitRows } = await state.supabase
+    .schema("finance_app")
+    .from("payment_splits")
+    .select("user_id, amount")
+    .eq("payment_id", paymentId);
   const total = Number(data.amount || 0) || 1;
   const prefill = (contribRows || []).map((r) => ({
     user_id: r.user_id,
     percentage: (Number(r.amount || 0) / total) * 100
   }));
-  renderPaidByRows(prefill);
+  const splitPrefill = (splitRows || []).map((r) => ({
+    user_id: r.user_id,
+    value: Number(r.amount || 0)
+  }));
+  const inferred = inferSplitPresetForEdit(contribRows || [], splitRows || [], total);
+  renderPaidByRows(prefill, {
+    forceCustom: false,
+    splitMode: inferred.mode,
+    splitPrefill
+  });
   const oneOffRadio = document.querySelector("#payment-form input[name='payment_kind'][value='one_off']");
   if (oneOffRadio) oneOffRadio.checked = true;
   document.getElementById("recurring-fields").classList.add("hidden");
@@ -2097,7 +2383,7 @@ async function renderBalances(payments) {
     const rows = (data || [])
       .map((r) => ({
         userId: r.user_id,
-        name: r.display_name || memberNameByUserId(r.user_id),
+        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
         net: Number(r.net || 0)
       }))
       .sort((a, b) => b.net - a.net);
@@ -2113,7 +2399,7 @@ async function renderBalances(payments) {
   const rows = (data || [])
     .map((r) => ({
       userId: r.user_id,
-      name: r.display_name || memberNameByUserId(r.user_id),
+      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
       net: Number(r.net || 0)
     }))
     .sort((a, b) => b.net - a.net);
@@ -2220,25 +2506,32 @@ async function renderRecurringSection() {
   target.innerHTML = rows
     .map((r) => {
       const dates = `${toDateLabel(r.start_date)}${r.end_date ? ` → ${toDateLabel(r.end_date)}` : ""}`;
-      return `<div style="display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid #e5e7eb">
-        <span>${escapeHtml(r.title)} (${escapeHtml(r.frequency)}) - ${escapeHtml(dates)} - ${escapeHtml(r.status)}</span>
-        <span style="display:flex; gap:6px; align-items:center">
+      const titleText = toTitleCaseText(r.title || "");
+      const frequencyText = toTitleCaseText(r.frequency || "");
+      const statusChecked = r.status === "active" ? "checked" : "";
+      const now = new Date();
+      const end = r.end_date ? new Date(`${r.end_date}T00:00:00`) : null;
+      const daysToEnd = end ? Math.ceil((end.getTime() - now.getTime()) / 86400000) : null;
+      const expiringSoon = r.status === "active" && daysToEnd !== null && daysToEnd >= 0 && daysToEnd <= 30;
+      return `<div class="recurring-row${expiringSoon ? " recurring-expiring-soon" : ""}" style="display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid #e5e7eb">
+        <span>${escapeHtml(titleText)} (${escapeHtml(frequencyText)}) - ${escapeHtml(dates)}</span>
+        <span class="recurring-actions" style="display:flex; gap:6px; align-items:center">
           <strong>${formatGbp(r.amount)}</strong>
           <button type="button" data-action="edit-recurring" data-template-id="${r.id}">Edit</button>
-          <button type="button" data-action="toggle-recurring" data-template-id="${r.id}" data-status="${r.status}">
-            ${r.status === "active" ? "Pause" : "Resume"}
-          </button>
+          <label class="inline recurring-active-toggle" style="border:1px solid #dbe1ea; border-radius:10px; padding:6px 10px; background:#fff">
+            <input type="checkbox" data-action="toggle-recurring" data-template-id="${r.id}" ${statusChecked} />
+            Active
+          </label>
           <button type="button" data-action="delete-recurring" data-template-id="${r.id}">Delete</button>
         </span>
       </div>`;
     })
     .join("");
 
-  target.querySelectorAll("button[data-action='toggle-recurring']").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const templateId = btn.getAttribute("data-template-id");
-      const currentStatus = btn.getAttribute("data-status");
-      const nextStatus = currentStatus === "active" ? "paused" : "active";
+  target.querySelectorAll("input[data-action='toggle-recurring']").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const templateId = input.getAttribute("data-template-id");
+      const nextStatus = input.checked ? "active" : "paused";
       const { error: updateError } = await state.supabase
         .schema("finance_app")
         .from("recurring_templates")
@@ -2246,6 +2539,7 @@ async function renderRecurringSection() {
         .eq("id", templateId);
       if (updateError) {
         showToast(`Failed to update recurring: ${formatError(updateError)}`);
+        input.checked = !input.checked;
         return;
       }
       showToast(`Recurring payment ${nextStatus}.`);
@@ -2450,7 +2744,7 @@ async function renderSummaryStats(payments, balanceContext) {
     });
     if (error) throw error;
     const rows = (data || []).map((r) => ({
-      name: r.display_name || memberNameByUserId(r.user_id),
+      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
       net: Number(r.net || 0)
     }));
     const live = buildSettlementSuggestions(rows);
@@ -2461,14 +2755,30 @@ async function renderSummaryStats(payments, balanceContext) {
 
   if (!suggestions.length) {
     setSettleUpEnabled(false);
-    owesSummary.textContent = randomNoOutstandingMessage();
+    const noBalanceKey = "none";
+    if (state.owesMessageKey !== noBalanceKey || !state.owesMessageText) {
+      state.owesMessageKey = noBalanceKey;
+      state.owesMessageText = randomNoOutstandingMessage();
+    }
+    owesSummary.textContent = state.owesMessageText;
     return;
   }
   setSettleUpEnabled(true);
+  const suggestionsKey = suggestions
+    .slice(0, 3)
+    .map((s) => `${s.from}|${s.to}|${Number(s.amount || 0).toFixed(2)}`)
+    .join(";");
+  if (state.owesMessageKey !== suggestionsKey || !state.owesMessageText) {
+    const maxSettlementAmount = Math.max(...suggestions.map((s) => Number(s.amount || 0)), 0);
+    state.owesMessageKey = suggestionsKey;
+    state.owesMessageText = randomOutstandingMessage(maxSettlementAmount);
+  }
+  const outstandingMessage = state.owesMessageText;
   owesSummary.innerHTML = suggestions
     .slice(0, 3)
-    .map((s) => `<div style="padding:4px 0">${escapeHtml(s.from)} <span aria-hidden="true">→</span> ${escapeHtml(s.to)}: <strong>${formatGbp(s.amount)}</strong></div>`)
+    .map((s) => `<div style="padding:4px 0">${escapeHtml(s.from)} owes ${escapeHtml(s.to)} <strong>${formatGbp(s.amount)}</strong></div>`)
     .join("");
+  owesSummary.innerHTML = `<div style="padding:4px 0; color:#374151">${escapeHtml(outstandingMessage)}</div>${owesSummary.innerHTML}`;
 }
 
 async function saveSettlementFromForm(form) {
@@ -2989,6 +3299,9 @@ async function bootstrap() {
 
   document.getElementById("load-more-payments")?.addEventListener("click", async () => {
     try {
+      if (!state.showSettledItems) {
+        state.showSettledItems = true;
+      }
       const more = await fetchPaymentsPage({ reset: false });
       if (!more.length) {
         state.paymentsHasMore = false;
