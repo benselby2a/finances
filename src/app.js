@@ -16,10 +16,12 @@ const state = {
   supabase: null,
   members: [],
   paymentsPageSize: 20,
-  paymentsOffset: 0,
   paymentsHasMore: false,
   latestSettlementDate: null,
   showSettledItems: false,
+  paymentsCursorCreatedAt: null,
+  loadedPayments: [],
+  lastHypotheticalRows: [],
   editingPaymentId: null,
   editingPaymentMeta: null,
   titleCategoryIndex: [],
@@ -29,7 +31,10 @@ const state = {
   editingTemplateId: null,
   editingTemplateBefore: null,
   owesMessageKey: null,
-  owesMessageText: null
+  owesMessageText: null,
+  dashboardRefreshInFlight: false,
+  dashboardRefreshQueued: false,
+  debouncedNetEffectUpdate: null
 };
 
 const GBP_FORMAT = new Intl.NumberFormat("en-GB", {
@@ -132,6 +137,39 @@ function setSignInEnabled(enabled) {
   }
 }
 
+function debounce(fn, waitMs = 120) {
+  let t = null;
+  return (...args) => {
+    if (t) window.clearTimeout(t);
+    t = window.setTimeout(() => {
+      t = null;
+      fn(...args);
+    }, waitMs);
+  };
+}
+
+function scheduleDashboardRefresh() {
+  if (state.dashboardRefreshInFlight) {
+    state.dashboardRefreshQueued = true;
+    return;
+  }
+  state.dashboardRefreshInFlight = true;
+  Promise.resolve()
+    .then(async () => {
+      do {
+        state.dashboardRefreshQueued = false;
+        await loadDashboardData();
+      } while (state.dashboardRefreshQueued);
+    })
+    .catch((error) => {
+      console.error("Background dashboard refresh failed:", error);
+      showToast(`Refresh failed: ${formatError(error)}`);
+    })
+    .finally(() => {
+      state.dashboardRefreshInFlight = false;
+    });
+}
+
 function formatError(error) {
   if (!error) return "Unknown error";
   if (typeof error === "string") return error;
@@ -228,6 +266,9 @@ function setupModals() {
   const currencySelect = document.querySelector("#payment-form select[name='currency_code']");
   const titleInput = document.querySelector("#payment-form input[name='title']");
   const amountInput = document.querySelector("#payment-form input[name='amount']");
+  const debouncedNetEffectUpdate = debounce(() => updatePaymentNetEffectPreview(), 120);
+  const debouncedCategoryInfer = debounce(() => maybeAutofillCategoryFromTitle(), 180);
+  state.debouncedNetEffectUpdate = debouncedNetEffectUpdate;
   const categorySelect = document.getElementById("category-select");
   const quickDateButtons = document.querySelectorAll("[data-quick-date]");
   const advancedOwesMode = document.getElementById("advanced-owes-mode");
@@ -247,8 +288,11 @@ function setupModals() {
   titleInput?.addEventListener("blur", () => {
     maybeAutofillCategoryFromTitle();
   });
+  titleInput?.addEventListener("input", () => {
+    debouncedCategoryInfer();
+  });
   amountInput?.addEventListener("input", () => {
-    updatePaymentNetEffectPreview();
+    debouncedNetEffectUpdate();
   });
   advancedOwesMode?.addEventListener("change", () => {
     state.advancedOwesMode = advancedOwesMode.value || "percentage";
@@ -282,8 +326,9 @@ function setupModals() {
     event.preventDefault();
     const formEl = event.currentTarget;
     try {
-      await savePaymentFromForm(formEl);
+      const mutation = await savePaymentFromForm(formEl);
       showToast(state.editingPaymentId ? "Payment updated." : "Payment saved.");
+      if (mutation) applyOptimisticPaymentMutation(mutation);
       paymentModal.close();
       formEl?.reset();
       const oneOffRadio = document.querySelector("#payment-form input[name='payment_kind'][value='one_off']");
@@ -299,6 +344,7 @@ function setupModals() {
       setDefaultPaymentDateIfEmpty();
       setDefaultSplitPreset();
       updatePaymentNetEffectPreview();
+      scheduleDashboardRefresh();
     } catch (error) {
       console.error(error);
       showToast(`Failed to save payment: ${error.message}`);
@@ -330,8 +376,7 @@ function setupModals() {
     localStorage.setItem(STORAGE_KEYS.lastSyncResult, JSON.stringify(result));
     document.getElementById("sync-status").textContent = syncResultLabel(result);
     showToast(`Recurring sync complete: ${result.generated} added, ${result.failed} failed.`);
-    await loadDashboardData();
-    await renderSyncLogs();
+    scheduleDashboardRefresh();
   });
 
   document.getElementById("settlement-form")?.addEventListener("submit", async (event) => {
@@ -342,7 +387,7 @@ function setupModals() {
       settlementModal?.close();
       form.reset();
       showToast("Settlement recorded.");
-      await loadDashboardData();
+      scheduleDashboardRefresh();
     } catch (error) {
       console.error(error);
       showToast(`Failed to save settlement: ${formatError(error)}`);
@@ -374,7 +419,7 @@ function setupModals() {
       await saveRecurringTemplateFromForm(form);
       recurringTemplateModal?.close();
       showToast("Recurring payment updated.");
-      await loadDashboardData();
+      scheduleDashboardRefresh();
     } catch (error) {
       console.error(error);
       showToast(`Failed to update recurring payment: ${formatError(error)}`);
@@ -1571,7 +1616,10 @@ function renderPaidByRows(prefill = null, options = {}) {
 
     target.querySelectorAll("[data-paid-by-user], [data-paid-by-pct]").forEach((el) => {
       el.addEventListener("change", () => updatePaymentNetEffectPreview());
-      el.addEventListener("input", () => updatePaymentNetEffectPreview());
+      el.addEventListener("input", () => {
+        if (state.debouncedNetEffectUpdate) state.debouncedNetEffectUpdate();
+        else updatePaymentNetEffectPreview();
+      });
       if (el.hasAttribute("data-paid-by-pct")) {
         el.addEventListener("blur", () => {
           updateSplitValidationBanner(true);
@@ -1689,7 +1737,8 @@ function renderSplitRows(prefill = null) {
   target.querySelectorAll("[data-split-user], [data-split-value]").forEach((el) => {
     el.addEventListener("input", () => {
       updateSplitValidationBanner(false);
-      updatePaymentNetEffectPreview();
+      if (state.debouncedNetEffectUpdate) state.debouncedNetEffectUpdate();
+      else updatePaymentNetEffectPreview();
     });
     el.addEventListener("change", () => {
       updateSplitValidationBanner(false);
@@ -1981,13 +2030,20 @@ async function loadDashboardData() {
   }
 
   try {
-    let hypotheticalRows = [];
-    try {
-      hypotheticalRows = await renderHypotheticalUpcoming();
-    } catch (error) {
-      console.error("Failed to load hypothetical rows:", error);
+    const [hypoRes, metaRes] = await Promise.allSettled([
+      renderHypotheticalUpcoming(),
+      buildPaymentMeta(payments)
+    ]);
+    const hypotheticalRows = hypoRes.status === "fulfilled" ? hypoRes.value : [];
+    state.lastHypotheticalRows = hypotheticalRows.slice();
+    if (hypoRes.status === "rejected") {
+      console.error("Failed to load hypothetical rows:", hypoRes.reason);
     }
-    const { payerLabels, paymentDetails } = await buildPaymentMeta(payments);
+    const payerLabels = metaRes.status === "fulfilled" ? metaRes.value.payerLabels : new Map();
+    const paymentDetails = metaRes.status === "fulfilled" ? metaRes.value.paymentDetails : new Map();
+    if (metaRes.status === "rejected") {
+      console.error("Failed to load payment meta:", metaRes.reason);
+    }
     renderPayments(payments, payerLabels, paymentDetails, hypotheticalRows);
   } catch (error) {
     console.error("Failed to render payments:", error);
@@ -1995,9 +2051,16 @@ async function loadDashboardData() {
   }
 
   let balanceContext = { balances: new Map(), suggestions: [] };
-  try {
-    balanceContext = (await renderBalances(payments)) || balanceContext;
-  } catch (error) {
+  const [balancesRes, recurringRes, syncRes, titleIndexRes] = await Promise.allSettled([
+    renderBalances(payments),
+    renderRecurringSection(),
+    renderSyncLogs(),
+    loadTitleCategoryIndex()
+  ]);
+  if (balancesRes.status === "fulfilled") {
+    balanceContext = balancesRes.value || balanceContext;
+  } else {
+    const error = balancesRes.reason;
     console.error("Failed to render balances:", error);
     const balancesEl = document.getElementById("balances-list");
     if (balancesEl) {
@@ -2009,10 +2072,10 @@ async function loadDashboardData() {
       }
     }
   }
+  if (recurringRes.status === "rejected") console.error("Failed to render recurring section:", recurringRes.reason);
+  if (syncRes.status === "rejected") console.error("Failed to render sync logs:", syncRes.reason);
+  if (titleIndexRes.status === "rejected") console.error("Failed to load title/category index:", titleIndexRes.reason);
   await renderSummaryStats(payments, balanceContext);
-  await renderRecurringSection();
-  await renderSyncLogs();
-  await loadTitleCategoryIndex();
   updateLoadMoreButton();
 }
 
@@ -2036,8 +2099,9 @@ async function loadTitleCategoryIndex() {
 
 async function fetchPaymentsPage({ reset = false } = {}) {
   if (reset) {
-    state.paymentsOffset = 0;
     state.showSettledItems = false;
+    state.paymentsCursorCreatedAt = null;
+    state.loadedPayments = [];
   }
 
   let defaultFromDate = null;
@@ -2058,24 +2122,27 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     state.latestSettlementDate = defaultFromDate;
   }
 
-  const from = state.paymentsOffset;
-  const to = state.paymentsOffset + state.paymentsPageSize - 1;
   let query = state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
+    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at, payment_contributions(user_id,amount), payment_splits(user_id,amount)")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
-    .order("payment_date", { ascending: false })
     .order("created_at", { ascending: false });
   const cutoff = state.latestSettlementDate || defaultFromDate;
   if (!state.showSettledItems && cutoff) {
     query = query.gte("payment_date", cutoff);
   }
-  const { data, error } = await query.range(from, to);
+  if (!reset && state.paymentsCursorCreatedAt) {
+    query = query.lt("created_at", state.paymentsCursorCreatedAt);
+  }
+  const { data, error } = await query.limit(state.paymentsPageSize);
   if (error) throw error;
 
   const rows = data || [];
+  if (rows.length) {
+    state.paymentsCursorCreatedAt = rows[rows.length - 1].created_at || state.paymentsCursorCreatedAt;
+  }
   if (!state.showSettledItems && cutoff) {
     const { count, error: olderCountError } = await state.supabase
       .schema("finance_app")
@@ -2085,35 +2152,16 @@ async function fetchPaymentsPage({ reset = false } = {}) {
       .is("deleted_at", null)
       .lt("payment_date", cutoff);
     if (olderCountError) throw olderCountError;
-    state.paymentsHasMore = Number(count || 0) > 0;
+    state.paymentsHasMore = Number(count || 0) > 0 || rows.length === state.paymentsPageSize;
   } else {
     state.paymentsHasMore = rows.length === state.paymentsPageSize;
   }
-  if (!reset) {
-    state.paymentsOffset += rows.length;
-  } else {
-    state.paymentsOffset = rows.length;
-  }
+  state.loadedPayments = reset ? rows.slice() : state.loadedPayments.concat(rows);
   return rows;
 }
 
 async function fetchLoadedPayments() {
-  const loaded = Math.max(0, state.paymentsOffset);
-  if (!loaded) return [];
-  let query = state.supabase
-    .schema("finance_app")
-    .from("payments")
-    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
-    .eq("household_id", state.householdId)
-    .is("deleted_at", null)
-    .order("payment_date", { ascending: false })
-    .order("created_at", { ascending: false });
-  if (!state.showSettledItems && state.latestSettlementDate) {
-    query = query.gte("payment_date", state.latestSettlementDate);
-  }
-  const { data, error } = await query.range(0, loaded - 1);
-  if (error) throw error;
-  return data || [];
+  return state.loadedPayments.slice();
 }
 
 function updateLoadMoreButton() {
@@ -2126,34 +2174,53 @@ function updateLoadMoreButton() {
 async function buildPaymentMeta(payments) {
   const paymentIds = payments.map((p) => p.id);
   if (!paymentIds.length) return { payerLabels: new Map(), paymentDetails: new Map() };
-  const paymentIdSet = new Set(paymentIds);
   const amountByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount_gbp || 0)]));
-
-  const { data: allContributions, error } = await state.supabase
-    .schema("finance_app")
-    .from("payment_contributions")
-    .select("payment_id, user_id, amount")
-    .limit(20000);
-  if (error) throw error;
-
-  const contributions = (allContributions || []).filter((c) => paymentIdSet.has(c.payment_id));
-  const { data: allSplits, error: splitsError } = await state.supabase
-    .schema("finance_app")
-    .from("payment_splits")
-    .select("payment_id, user_id, amount")
-    .limit(20000);
-  if (splitsError) throw splitsError;
-  const splits = (allSplits || []).filter((s) => paymentIdSet.has(s.payment_id));
+  const hasEmbeddedMeta = payments.some((p) => Array.isArray(p.payment_contributions) || Array.isArray(p.payment_splits));
 
   const byPayment = new Map();
-  for (const c of contributions) {
-    if (!byPayment.has(c.payment_id)) byPayment.set(c.payment_id, []);
-    byPayment.get(c.payment_id).push(c);
-  }
   const splitByPayment = new Map();
-  for (const s of splits) {
-    if (!splitByPayment.has(s.payment_id)) splitByPayment.set(s.payment_id, []);
-    splitByPayment.get(s.payment_id).push(s);
+  if (hasEmbeddedMeta) {
+    for (const p of payments) {
+      byPayment.set(
+        p.id,
+        (p.payment_contributions || []).map((c) => ({
+          payment_id: p.id,
+          user_id: c.user_id,
+          amount: c.amount
+        }))
+      );
+      splitByPayment.set(
+        p.id,
+        (p.payment_splits || []).map((s) => ({
+          payment_id: p.id,
+          user_id: s.user_id,
+          amount: s.amount
+        }))
+      );
+    }
+  } else {
+    const { data: contributions, error } = await state.supabase
+      .schema("finance_app")
+      .from("payment_contributions")
+      .select("payment_id, user_id, amount")
+      .in("payment_id", paymentIds);
+    if (error) throw error;
+
+    const { data: splits, error: splitsError } = await state.supabase
+      .schema("finance_app")
+      .from("payment_splits")
+      .select("payment_id, user_id, amount")
+      .in("payment_id", paymentIds);
+    if (splitsError) throw splitsError;
+
+    for (const c of contributions || []) {
+      if (!byPayment.has(c.payment_id)) byPayment.set(c.payment_id, []);
+      byPayment.get(c.payment_id).push(c);
+    }
+    for (const s of splits || []) {
+      if (!splitByPayment.has(s.payment_id)) splitByPayment.set(s.payment_id, []);
+      splitByPayment.get(s.payment_id).push(s);
+    }
   }
 
   const labels = new Map();
@@ -2369,7 +2436,21 @@ async function deletePayment(paymentId) {
     return;
   }
   showToast("Payment deleted.");
-  await loadDashboardData();
+  applyOptimisticPaymentMutation({ action: "delete", paymentId });
+  scheduleDashboardRefresh();
+}
+
+function applyOptimisticPaymentMutation(mutation) {
+  if (!mutation) return;
+  if (mutation.action === "delete") {
+    state.loadedPayments = (state.loadedPayments || []).filter((p) => p.id !== mutation.paymentId);
+  } else if (mutation.action === "upsert" && mutation.payment) {
+    const next = (state.loadedPayments || []).filter((p) => p.id !== mutation.payment.id);
+    next.unshift(mutation.payment);
+    next.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    state.loadedPayments = next;
+  }
+  renderPayments(state.loadedPayments || [], new Map(), new Map(), state.lastHypotheticalRows || []);
 }
 
 async function renderBalances(payments) {
@@ -2543,8 +2624,7 @@ async function renderRecurringSection() {
         return;
       }
       showToast(`Recurring payment ${nextStatus}.`);
-      await loadDashboardData();
-      await renderSyncLogs();
+      scheduleDashboardRefresh();
     });
   });
   target.querySelectorAll("button[data-action='edit-recurring']").forEach((btn) => {
@@ -2611,8 +2691,7 @@ async function renderRecurringSection() {
       }
 
       showToast("Recurring payment deleted.");
-      await loadDashboardData();
-      await renderSyncLogs();
+      scheduleDashboardRefresh();
     });
   });
 }
@@ -2961,6 +3040,7 @@ async function savePaymentFromForm(form) {
   const splitRowsComputed = buildSplitRows(amount, paidByRows);
 
   let paymentId = state.editingPaymentId;
+  let optimisticPayment = null;
   if (paymentId) {
     const { error: updateError } = await state.supabase
       .schema("finance_app")
@@ -3000,6 +3080,21 @@ async function savePaymentFromForm(form) {
       notes,
       paymentDate
     });
+    const existing = (state.loadedPayments || []).find((p) => p.id === paymentId);
+    optimisticPayment = {
+      id: paymentId,
+      household_id: state.householdId,
+      title,
+      amount_gbp: amountGbp,
+      payment_date: paymentDate,
+      category_key: categoryKey,
+      source_type: existing?.source_type || sourceType,
+      created_by: existing?.created_by || state.currentUser.id,
+      generated_by_recurring_template_id: existing?.generated_by_recurring_template_id || null,
+      created_at: existing?.created_at || new Date().toISOString(),
+      payment_contributions: paidByRows.map((r) => ({ user_id: r.user_id, amount: r.amount })),
+      payment_splits: splitRowsComputed.map((r) => ({ user_id: r.user_id, amount: r.amount }))
+    };
   } else {
     const { data: payment, error: paymentError } = await state.supabase
       .schema("finance_app")
@@ -3020,7 +3115,7 @@ async function savePaymentFromForm(form) {
           created_by: state.currentUser.id
         }
       )
-      .select("id")
+      .select("id, created_at")
       .single();
     if (paymentError) throw paymentError;
 
@@ -3039,11 +3134,24 @@ async function savePaymentFromForm(form) {
       .from("payment_splits")
       .insert(splitRows);
     if (splitsError) throw splitsError;
+    optimisticPayment = {
+      id: payment.id,
+      household_id: state.householdId,
+      title,
+      amount_gbp: amountGbp,
+      payment_date: paymentDate,
+      category_key: categoryKey,
+      source_type: sourceType,
+      created_by: state.currentUser.id,
+      generated_by_recurring_template_id: null,
+      created_at: payment.created_at || new Date().toISOString(),
+      payment_contributions: paidByRows.map((r) => ({ user_id: r.user_id, amount: r.amount })),
+      payment_splits: splitRowsComputed.map((r) => ({ user_id: r.user_id, amount: r.amount }))
+    };
   }
 
   if (!isRecurring || state.editingPaymentId) {
-    await loadDashboardData();
-    return;
+    return optimisticPayment ? { action: "upsert", payment: optimisticPayment } : null;
   }
 
   const frequency = String(formData.get("frequency") || "monthly");
@@ -3137,8 +3245,7 @@ async function savePaymentFromForm(form) {
       status: "skipped_exists"
     });
   if (seedLogError) throw seedLogError;
-
-  await loadDashboardData();
+  return null;
 }
 
 async function rebalancePaymentRows(paymentId, newAmount) {
@@ -3315,6 +3422,7 @@ async function bootstrap() {
       } catch (error) {
         console.error("Failed to load hypothetical rows:", error);
       }
+      state.lastHypotheticalRows = hypotheticalRows.slice();
       const { payerLabels, paymentDetails } = await buildPaymentMeta(loadedPayments);
       renderPayments(loadedPayments, payerLabels, paymentDetails, hypotheticalRows);
       updateLoadMoreButton();
