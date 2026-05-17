@@ -13,6 +13,9 @@
   --radius-md: 14px;
   --radius-lg: 18px;
   --shadow-1: 0 8px 24px rgba(17, 24, 39, 0.06);
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
 }
 
 * {
@@ -30,6 +33,13 @@ body {
   line-height: 1.35;
 }
 
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
 .hidden {
   display: none !important;
 }
@@ -45,7 +55,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-3);
 }
 
 .topbar h1 {
@@ -60,7 +70,7 @@ body {
   gap: 8px;
   width: 100%;
   max-width: 520px;
-  margin: 0 auto;
+  margin-left: auto;
 }
 
 .actions > button {
@@ -102,6 +112,12 @@ button.primary {
   border-radius: var(--radius-lg);
   padding: 14px;
   box-shadow: var(--shadow-1);
+}
+
+.card > h2,
+.card > h3 {
+  margin-bottom: var(--space-2);
+  line-height: 1.2;
 }
 
 .hypothetical-card {
@@ -176,6 +192,7 @@ dialog {
   border: 1px solid var(--line);
   border-radius: 18px;
   width: min(680px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
   box-shadow: 0 18px 36px rgba(17, 24, 39, 0.2);
 }
 
@@ -196,13 +213,19 @@ dialog {
 
 form {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
+}
+
+form > h3 {
+  margin-bottom: var(--space-1);
+  padding-right: 44px;
+  line-height: 1.2;
 }
 
 #payment-form fieldset {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 10px 12px 12px;
+  padding: 8px 10px 10px;
   background: #fcfdff;
 }
 
@@ -214,7 +237,7 @@ form {
 
 label {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: 14px;
 }
 
@@ -224,7 +247,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 10px 11px;
-  background: #fff;
+  background: #fcfdff;
 }
 
 input:focus,
@@ -246,7 +269,7 @@ menu {
   justify-content: flex-end;
   gap: 8px;
   padding: 0;
-  margin: 8px 0 0;
+  margin: 12px 0 0;
 }
 
 .quick-date-row {
@@ -264,8 +287,8 @@ menu {
 
 .split-presets {
   display: grid;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
 .kind-toggle {
@@ -318,7 +341,7 @@ menu {
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 16px;
-  padding: 9px;
+  padding: 7px 8px;
   background: #fcfdff;
 }
 
@@ -350,18 +373,30 @@ menu {
   font-size: 13px;
 }
 
+#advanced-split-fields {
+  padding-top: 12px;
+}
+
+#advanced-split-fields > label {
+  margin-bottom: 4px;
+}
+
+#split-rows {
+  margin-top: 4px;
+}
+
 .advanced-row {
   display: grid;
   grid-template-columns: 1fr 120px;
   gap: 8px;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .three-col {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .payment-meta-row input,
@@ -372,18 +407,38 @@ menu {
 .two-col {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
+}
+
+.expense-date-row {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
 }
 
 .toast {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
   background: #111827;
   color: #fff;
   padding: 12px 14px;
   border-radius: 10px;
   max-width: 420px;
+  z-index: 9999;
+}
+
+.dialog-toast {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  background: #111827;
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 10px;
+  max-width: min(520px, calc(100% - 24px));
+  z-index: 10;
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.25);
 }
 
 .pill {
@@ -446,18 +501,65 @@ menu {
 .payment-meta-line {
   font-size: 12px;
   color: var(--muted);
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .payment-result-line {
   font-size: 12px;
   color: #374151;
-  margin-top: 2px;
+  margin-top: 4px;
   font-weight: 600;
+}
+
+.net-effect-card {
+  background: #f8fafc;
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.net-effect-card .net-effect-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+
+.net-effect-card .net-effect-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.3;
+}
+
+.net-effect-card .net-effect-result {
+  font-size: 12px;
+  color: #1f2937;
+  margin-top: 4px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
 .payment-details-mobile {
   display: none;
+}
+
+.recurring-expiring-soon {
+  background: #fff7ed;
+  border-radius: 10px;
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+
+.recurring-actions > button,
+.recurring-active-toggle {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recurring-active-toggle {
+  gap: 6px;
 }
 
 .settings-actions {
@@ -476,6 +578,12 @@ menu {
   .topbar h1 {
     width: 100%;
     font-size: 26px;
+  }
+
+  .actions {
+    width: 100%;
+    max-width: none;
+    margin: 0 auto;
   }
 
   .settings-actions {

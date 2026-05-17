@@ -43,7 +43,7 @@
         <h2 style="margin-top:0">Payments</h2>
         <div id="payments-list" class="card">No payments yet.</div>
         <div style="margin-top:8px; display:flex; justify-content:flex-end">
-          <button id="load-more-payments" type="button" class="hidden">Load more</button>
+          <button id="load-more-payments" type="button" class="hidden">Show Settled Expenses</button>
         </div>
       </section>
 
@@ -58,7 +58,10 @@
       <form id="payment-form" method="dialog">
         <button type="button" class="modal-close-btn" data-close-dialog="payment" aria-label="Close dialog">×</button>
         <h3>Add Payment</h3>
-        <label>Expense <input name="title" required placeholder="Enter item or bill" /></label>
+        <div class="two-col expense-date-row">
+          <label>Expense <input name="title" required placeholder="Enter item or bill" /></label>
+          <label>Date <input name="payment_date" type="date" required /></label>
+        </div>
         <div class="three-col payment-meta-row">
           <label>Amount <input name="amount" type="number" step="0.01" min="0.01" required placeholder="0.00" /></label>
           <label>Category
@@ -105,24 +108,20 @@
         <fieldset>
           <legend>Split Options</legend>
           <div id="split-presets" class="split-presets"></div>
-        </fieldset>
-        <fieldset id="advanced-split-fields" class="hidden">
-          <legend>Advanced options</legend>
-          <label>Owes split mode
-            <select id="advanced-owes-mode">
-              <option value="percentage">Percentage</option>
-              <option value="fixed">Fixed amount (GBP)</option>
-              <option value="ratio">Ratio</option>
-            </select>
-          </label>
-          <div id="split-rows">Loading members...</div>
-          <div id="split-validation-banner" class="warning-banner hidden"></div>
-          <div id="net-effect-preview" class="card" style="padding:10px; margin-top:8px">
-            Enter amount and payer split to see net effect.
+          <div id="advanced-split-fields" class="hidden">
+            <label>Split Mode
+              <select id="advanced-owes-mode">
+                <option value="percentage">Percentage</option>
+                <option value="fixed">Fixed amount (GBP)</option>
+                <option value="ratio">Ratio</option>
+              </select>
+            </label>
+            <div id="split-rows">Loading members...</div>
+            <div id="split-validation-banner" class="warning-banner hidden"></div>
           </div>
         </fieldset>
-        <div class="two-col">
-          <label>Date <input name="payment_date" type="date" required /></label>
+        <div id="net-effect-preview" class="card net-effect-card" style="padding:10px; margin-top:8px">
+          Enter amount and payer split to see net effect.
         </div>
         <label id="fx-rate-to-gbp-row" class="hidden">FX rate to GBP (required if non-GBP)
           <input name="fx_rate_to_gbp" type="number" step="0.00000001" min="0.00000001" placeholder="1.00000000" />
@@ -135,7 +134,7 @@
           <legend>Payment Type</legend>
           <label class="kind-option">
             <input type="radio" name="payment_kind" value="one_off" checked />
-            <span>• One-off</span>
+            <span>💳 One-off</span>
           </label>
           <label class="kind-option">
             <input type="radio" name="payment_kind" value="recurring" />
@@ -198,12 +197,14 @@
         </div>
         <input name="from_user_id" type="hidden" required />
         <input name="to_user_id" type="hidden" required />
-        <label>Amount (GBP)
-          <input name="amount" type="number" min="0.01" step="0.01" required />
-        </label>
-        <label>Date
-          <input name="payment_date" type="date" required />
-        </label>
+        <div class="two-col">
+          <label>Amount (GBP)
+            <input name="amount" type="number" min="0.01" step="0.01" required />
+          </label>
+          <label>Date
+            <input name="payment_date" type="date" required />
+          </label>
+        </div>
         <menu>
           <button id="cancel-settlement" type="button">Cancel</button>
           <button id="save-settlement" value="default" class="primary">Save settlement</button>
@@ -238,6 +239,7 @@
           </select>
         </label>
         <div id="recurring-impact" class="card">No impact calculated yet.</div>
+        <div id="recurring-next-dates" class="card">No upcoming dates.</div>
         <menu>
           <button id="cancel-recurring-template" type="button">Cancel</button>
           <button id="save-recurring-template" value="default" class="primary">Save template</button>
