@@ -3524,21 +3524,15 @@ async function bootstrap() {
 
   state.currentUser = session.user;
   await ensureHouseholdContext();
-  await loadMembers();
-  await loadCategoryOptions();
+
+  // Load members and categories in parallel
+  await Promise.all([loadMembers(), loadCategoryOptions()]);
   renderPaidByRows();
   updatePaymentNetEffectPreview();
   state.categoryManuallySet = false;
   setAuthedUI(true);
 
-  const result = await processRecurringPayments();
-  state.syncResult = result;
-  localStorage.setItem(STORAGE_KEYS.lastSyncResult, JSON.stringify(result));
-  document.getElementById("sync-status").textContent = syncResultLabel(result);
-  if (result.failed > 0) {
-    showToast(`Recurring sync had ${result.failed} failed item${result.failed === 1 ? "" : "s"}.`);
-  }
-
+  // Load dashboard data first, show content ASAP
   await loadDashboardData();
 
   // Hide loading spinner, reveal app content
@@ -3547,7 +3541,25 @@ async function bootstrap() {
   const appContent = document.getElementById("app-content");
   if (appContent) appContent.classList.remove("hidden");
 
-  await runStartupSummary();
+  // Defer recurring sync and summary to after render
+  setTimeout(async () => {
+    try {
+      const result = await processRecurringPayments();
+      state.syncResult = result;
+      localStorage.setItem(STORAGE_KEYS.lastSyncResult, JSON.stringify(result));
+      document.getElementById("sync-status").textContent = syncResultLabel(result);
+      if (result.failed > 0) {
+        showToast(`Recurring sync had ${result.failed} failed item${result.failed === 1 ? "" : "s"}.`);
+      }
+      if (result.generated > 0) {
+        // Refresh dashboard if new recurring payments were generated
+        await loadDashboardData();
+      }
+      await runStartupSummary();
+    } catch (err) {
+      console.error("Background sync error:", err);
+    }
+  }, 0);
 }
 
 bootstrap().catch((error) => {
