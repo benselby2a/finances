@@ -99,6 +99,18 @@ button.primary {
   color: #fff;
 }
 
+.icon-btn {
+  min-height: 34px;
+  min-width: 34px;
+  padding: 6px 8px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -137,6 +149,17 @@ button.primary {
   background: #eef6ff !important;
 }
 
+.toggle-label {
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+
 .accordion {
   margin-bottom: 10px;
 }
@@ -144,6 +167,7 @@ button.primary {
 .accordion-toggle {
   width: 100%;
   text-align: left;
+  font-size: 1.5em;
   font-weight: 600;
   background: #f8fbff;
   display: flex;
@@ -461,6 +485,9 @@ menu {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
 .payments-table thead th {
@@ -479,6 +506,10 @@ menu {
   border-bottom: 1px solid var(--line);
   vertical-align: top;
   padding: 10px 8px;
+}
+
+.payments-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .payments-table tbody tr:nth-child(even) {
@@ -698,7 +729,6 @@ menu {
   }
 
   .payments-table tbody td[data-label="Actions"] button {
-    min-width: 72px;
     padding: 8px 10px;
   }
 

@@ -41,15 +41,21 @@
 
       <section class="card" style="margin-bottom:12px">
         <h2 style="margin-top:0">Payments</h2>
-        <div id="payments-list" class="card">No payments yet.</div>
-        <div style="margin-top:8px; display:flex; justify-content:flex-end">
-          <button id="load-more-payments" type="button" class="hidden">Show Settled Expenses</button>
+        <label id="show-projected-toggle" class="toggle-label hidden">
+          <input type="checkbox" id="show-projected" checked />
+          Show projected payments
+        </label>
+        <div id="payments-list">No payments yet.</div>
+        <div style="margin-top:8px; display:flex; justify-content:center">
+          <button id="load-more-payments" type="button" class="hidden" style="width:100%; max-width:400px">Show Settled Expenses</button>
         </div>
       </section>
 
-      <section class="card" style="margin-bottom:12px">
-        <h2 style="margin-top:0">Recurring</h2>
-        <div id="recurring-list" class="card">No recurring payments yet.</div>
+      <section class="card accordion" data-section="recurring" style="margin-bottom:12px">
+        <button type="button" class="accordion-toggle">Recurring</button>
+        <div class="accordion-content">
+          <div id="recurring-list">No recurring payments yet.</div>
+        </div>
       </section>
 
     </main>
