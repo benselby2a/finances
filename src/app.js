@@ -3536,6 +3536,13 @@ async function bootstrap() {
   }
 
   await loadDashboardData();
+
+  // Hide loading spinner, reveal app content
+  const appLoading = document.getElementById("app-loading");
+  if (appLoading) appLoading.classList.add("hidden");
+  const appContent = document.getElementById("app-content");
+  if (appContent) appContent.classList.remove("hidden");
+
   await runStartupSummary();
 }
 

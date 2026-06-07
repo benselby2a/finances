@@ -29,6 +29,11 @@
     </div>
 
     <main id="app" class="app hidden">
+      <div id="app-loading" class="app-loading">
+        <div class="app-loading-spinner"></div>
+        <p>Loading finances…</p>
+      </div>
+      <div id="app-content" class="app-content hidden">
       <header class="topbar">
         <h1>🐳 🧳 Finances</h1>
         <div class="actions">
@@ -61,6 +66,7 @@
         </div>
       </section>
 
+      </div><!-- /app-content -->
     </main>
 
     <dialog id="payment-modal">
