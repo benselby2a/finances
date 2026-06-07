@@ -19,9 +19,12 @@ const state = {
   paymentsHasMore: false,
   latestSettlementDate: null,
   showSettledItems: false,
+  paymentsCursorPaymentDate: null,
   paymentsCursorCreatedAt: null,
   loadedPayments: [],
   lastHypotheticalRows: [],
+  lastPayerLabels: new Map(),
+  lastPaymentDetails: new Map(),
   editingPaymentId: null,
   editingPaymentMeta: null,
   titleCategoryIndex: [],
@@ -1292,7 +1295,7 @@ async function renderHypotheticalUpcoming() {
     items.push(...filtered);
   }
 
-  items.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title));
+  items.sort((a, b) => b.dueDate.localeCompare(a.dueDate) || a.title.localeCompare(b.title));
   return items.slice(0, 100).map((r, idx) => ({
     id: `hypo-${r.dueDate}-${idx}-${r.title}`,
     payment_date: r.dueDate,
@@ -2100,6 +2103,7 @@ async function loadTitleCategoryIndex() {
 async function fetchPaymentsPage({ reset = false } = {}) {
   if (reset) {
     state.showSettledItems = false;
+    state.paymentsCursorPaymentDate = null;
     state.paymentsCursorCreatedAt = null;
     state.loadedPayments = [];
   }
@@ -2128,20 +2132,23 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at, payment_contributions(user_id,amount), payment_splits(user_id,amount)")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
+    .order("payment_date", { ascending: false })
     .order("created_at", { ascending: false });
   const cutoff = state.latestSettlementDate || defaultFromDate;
   if (!state.showSettledItems && cutoff) {
     query = query.gte("payment_date", cutoff);
   }
-  if (!reset && state.paymentsCursorCreatedAt) {
-    query = query.lt("created_at", state.paymentsCursorCreatedAt);
+  if (!reset && state.paymentsCursorPaymentDate) {
+    query = query.or(`payment_date.lt.${state.paymentsCursorPaymentDate},and(payment_date.eq.${state.paymentsCursorPaymentDate},created_at.lt.${state.paymentsCursorCreatedAt})`);
   }
   const { data, error } = await query.limit(state.paymentsPageSize);
   if (error) throw error;
 
   const rows = data || [];
   if (rows.length) {
-    state.paymentsCursorCreatedAt = rows[rows.length - 1].created_at || state.paymentsCursorCreatedAt;
+    const last = rows[rows.length - 1];
+    state.paymentsCursorPaymentDate = last.payment_date || state.paymentsCursorPaymentDate;
+    state.paymentsCursorCreatedAt = last.created_at || state.paymentsCursorCreatedAt;
   }
   if (!state.showSettledItems && cutoff) {
     const { count, error: olderCountError } = await state.supabase
@@ -2285,57 +2292,71 @@ async function buildPaymentMeta(payments) {
   return { payerLabels: labels, paymentDetails };
 }
 
+function renderPaymentRow(p, payerLabels, paymentDetails) {
+  const isSettlement = p.source_type === "settlement";
+  const payer = p.is_hypothetical
+    ? (p.hypothetical_payer_name || memberNameByUserId(p.created_by) || "—")
+    : (payerLabels?.get(p.id) || memberNameByUserId(p.created_by));
+  const detail = paymentDetails?.get(p.id) || null;
+  const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
+  const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
+  const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
+  const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
+  const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Projected from recurring payment</div>` : ""}
+      ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
+      ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
+      ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
+      ${!isSettlement && detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}`;
+  const hasSubtitleDetails = subtitleHtml.replace(/\s/g, "").length > 0;
+  const rowClassWithDetails = `${rowClass}${hasSubtitleDetails ? "" : " no-mobile-details"}`;
+  return `<tr class="${rowClassWithDetails}">
+    <td data-label="Date">${toDateLabel(p.payment_date)}</td>
+    <td data-label="Expense">
+      <div class="payment-title" style="display:flex; align-items:center; gap:8px">
+        ${isSettlement ? "" : `<span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span>`}
+        <span>${escapeHtml(p.title)}</span>
+      </div>
+      <div class="payment-subtitle-desktop">${subtitleHtml}</div>
+    </td>
+    <td data-label="Type"><span class="pill" title="${escapeHtml(typeLabel)}" aria-label="${escapeHtml(typeLabel)}">${typeIcon(typeLabel)}</span></td>
+    <td data-label="Payer">${escapeHtml(payer)}</td>
+    <td data-label="Amount" style="text-align:right"><strong>${formatGbp(p.amount_gbp)}</strong></td>
+    <td data-label="Details" class="payment-details-mobile${isSettlement ? " no-details" : ""}">${subtitleHtml}</td>
+    <td data-label="Actions" style="text-align:right; white-space:nowrap">
+      ${p.is_hypothetical
+        ? `<span style="color:#6b7280; font-size:12px">Projected</span>`
+        : (isSettlement
+          ? `<button type="button" class="icon-btn" data-action="delete" data-payment-id="${p.id}" title="Delete">&#x1F5D1;</button>`
+          : `<button type="button" class="icon-btn" data-action="edit" data-payment-id="${p.id}" title="Edit">&#x270E;</button>
+      <button type="button" class="icon-btn" data-action="delete" data-payment-id="${p.id}" title="Delete">&#x1F5D1;</button>`)}
+    </td>
+  </tr>`;
+}
+
 function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypotheticalRows = []) {
+  state.lastPayerLabels = payerLabels || new Map();
+  state.lastPaymentDetails = paymentDetails || new Map();
   const target = document.getElementById("payments-list");
-  const combined = [...(hypotheticalRows || []), ...(payments || [])];
+  const showProjected = document.getElementById("show-projected")?.checked ?? true;
+  const toggleLabel = document.getElementById("show-projected-toggle");
+
+  if (hypotheticalRows.length) {
+    toggleLabel?.classList.remove("hidden");
+  } else {
+    toggleLabel?.classList.add("hidden");
+  }
+
+  const combined = [
+    ...(showProjected ? (hypotheticalRows || []).slice(0, 100) : []),
+    ...(payments || []).slice(0, 200)
+  ];
+
   if (!combined.length) {
     target.textContent = "No payments yet.";
     return;
   }
 
-  const rows = combined
-    .slice(0, 200)
-    .map((p) => {
-      const isSettlement = p.source_type === "settlement";
-      const payer = p.is_hypothetical
-        ? (p.hypothetical_payer_name || memberNameByUserId(p.created_by) || "—")
-        : (payerLabels?.get(p.id) || memberNameByUserId(p.created_by));
-      const detail = paymentDetails?.get(p.id) || null;
-      const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
-      const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
-      const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
-      const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
-      const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Projected from recurring payment</div>` : ""}
-          ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
-          ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
-          ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
-          ${!isSettlement && detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}`;
-      const hasSubtitleDetails = subtitleHtml.replace(/\s/g, "").length > 0;
-      const rowClassWithDetails = `${rowClass}${hasSubtitleDetails ? "" : " no-mobile-details"}`;
-      return `<tr class="${rowClassWithDetails}">
-        <td data-label="Date">${toDateLabel(p.payment_date)}</td>
-        <td data-label="Expense">
-          <div class="payment-title" style="display:flex; align-items:center; gap:8px">
-            ${isSettlement ? "" : `<span class="pill" title="${escapeHtml(categoryLabel)}" aria-label="${escapeHtml(categoryLabel)}">${categoryIcon(categoryLabel)}</span>`}
-            <span>${escapeHtml(p.title)}</span>
-          </div>
-          <div class="payment-subtitle-desktop">${subtitleHtml}</div>
-        </td>
-        <td data-label="Type"><span class="pill" title="${escapeHtml(typeLabel)}" aria-label="${escapeHtml(typeLabel)}">${typeIcon(typeLabel)}</span></td>
-        <td data-label="Payer">${escapeHtml(payer)}</td>
-        <td data-label="Amount" style="text-align:right"><strong>${formatGbp(p.amount_gbp)}</strong></td>
-        <td data-label="Details" class="payment-details-mobile${isSettlement ? " no-details" : ""}">${subtitleHtml}</td>
-        <td data-label="Actions" style="text-align:right; white-space:nowrap">
-          ${p.is_hypothetical
-            ? `<span style="color:#6b7280; font-size:12px">Projected</span>`
-            : (isSettlement
-              ? `<button type="button" data-action="delete" data-payment-id="${p.id}">Delete</button>`
-              : `<button type="button" data-action="edit" data-payment-id="${p.id}" style="margin-right:6px">Edit</button>
-          <button type="button" data-action="delete" data-payment-id="${p.id}">Delete</button>`)}
-        </td>
-      </tr>`;
-    })
-    .join("");
+  const rows = combined.map((p) => renderPaymentRow(p, payerLabels, paymentDetails)).join("");
 
   target.innerHTML = `
     <div class="payments-table-wrap">
@@ -2584,9 +2605,8 @@ async function renderRecurringSection() {
     return;
   }
 
-  target.innerHTML = rows
+  const tableRows = rows
     .map((r) => {
-      const dates = `${toDateLabel(r.start_date)}${r.end_date ? ` → ${toDateLabel(r.end_date)}` : ""}`;
       const titleText = toTitleCaseText(r.title || "");
       const frequencyText = toTitleCaseText(r.frequency || "");
       const statusChecked = r.status === "active" ? "checked" : "";
@@ -2594,20 +2614,44 @@ async function renderRecurringSection() {
       const end = r.end_date ? new Date(`${r.end_date}T00:00:00`) : null;
       const daysToEnd = end ? Math.ceil((end.getTime() - now.getTime()) / 86400000) : null;
       const expiringSoon = r.status === "active" && daysToEnd !== null && daysToEnd >= 0 && daysToEnd <= 30;
-      return `<div class="recurring-row${expiringSoon ? " recurring-expiring-soon" : ""}" style="display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid #e5e7eb">
-        <span>${escapeHtml(titleText)} (${escapeHtml(frequencyText)}) - ${escapeHtml(dates)}</span>
-        <span class="recurring-actions" style="display:flex; gap:6px; align-items:center">
-          <strong>${formatGbp(r.amount)}</strong>
-          <button type="button" data-action="edit-recurring" data-template-id="${r.id}">Edit</button>
-          <label class="inline recurring-active-toggle" style="border:1px solid #dbe1ea; border-radius:10px; padding:6px 10px; background:#fff">
-            <input type="checkbox" data-action="toggle-recurring" data-template-id="${r.id}" ${statusChecked} />
-            Active
-          </label>
-          <button type="button" data-action="delete-recurring" data-template-id="${r.id}">Delete</button>
-        </span>
-      </div>`;
+      const rowClass = expiringSoon ? " recurring-expiring-soon" : "";
+      return `<tr class="${rowClass}">
+        <td data-label="Name">${escapeHtml(titleText)}</td>
+        <td data-label="Amount" style="text-align:right"><strong>${formatGbp(r.amount)}</strong></td>
+        <td data-label="Frequency">${escapeHtml(frequencyText)}</td>
+        <td data-label="Start">${toDateLabel(r.start_date)}</td>
+        <td data-label="End">${r.end_date ? toDateLabel(r.end_date) : "—"}</td>
+        <td data-label="Actions">
+          <div style="display:flex; align-items:center; justify-content:flex-end; gap:6px">
+            <button type="button" class="icon-btn" data-action="edit-recurring" data-template-id="${r.id}" title="Edit">&#x270E;</button>
+            <label class="active-toggle-label" style="display:inline-flex; align-items:center; gap:4px; border:1px solid #dbe1ea; border-radius:8px; padding:6px 8px; background:#fff; font-size:13px; cursor:pointer; line-height:1">
+              <input type="checkbox" data-action="toggle-recurring" data-template-id="${r.id}" ${statusChecked} />
+              Active
+            </label>
+            <button type="button" class="icon-btn" data-action="delete-recurring" data-template-id="${r.id}" title="Delete">&#x1F5D1;</button>
+          </div>
+        </td>
+      </tr>`;
     })
     .join("");
+
+  target.innerHTML = `
+    <div class="payments-table-wrap">
+      <table class="payments-table">
+        <thead>
+          <tr>
+            <th style="text-align:left">Name</th>
+            <th style="text-align:right">Amount</th>
+            <th style="text-align:left">Frequency</th>
+            <th style="text-align:left">Start</th>
+            <th style="text-align:left">End</th>
+            <th style="text-align:right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `;
 
   target.querySelectorAll("input[data-action='toggle-recurring']").forEach((input) => {
     input.addEventListener("change", async () => {
@@ -3345,6 +3389,17 @@ async function bootstrap() {
   setupAccordion();
   setupModals();
   setSignInEnabled(false);
+
+  const showProjectedCheckbox = document.getElementById("show-projected");
+  if (showProjectedCheckbox) {
+    const savedPref = localStorage.getItem("finance.showProjected");
+    if (savedPref !== null) showProjectedCheckbox.checked = savedPref !== "false";
+    showProjectedCheckbox.addEventListener("change", () => {
+      localStorage.setItem("finance.showProjected", showProjectedCheckbox.checked);
+      const loadedPayments = state.loadedPayments.slice();
+      renderPayments(loadedPayments, state.lastPayerLabels, state.lastPaymentDetails, state.lastHypotheticalRows);
+    });
+  }
 
   const signInForm = document.getElementById("sign-in-form");
   signInForm?.addEventListener("submit", async (event) => {
