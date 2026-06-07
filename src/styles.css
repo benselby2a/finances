@@ -229,6 +229,10 @@ button.primary {
   width: min(620px, calc(100vw - 32px));
 }
 
+[data-hub] .auth-gate { display: none !important; }
+[data-hub] .app.hidden { display: block !important; }
+[data-hub] .app-content.hidden { display: block !important; }
+
 #sign-in-form button,
 .auth-secondary-btn {
   width: 100%;

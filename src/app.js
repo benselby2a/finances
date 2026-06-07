@@ -3496,10 +3496,14 @@ async function bootstrap() {
 
   try {
     let createClient;
-    try {
-      ({ createClient } = await import("https://esm.sh/@supabase/supabase-js@2"));
-    } catch {
-      ({ createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"));
+    if (window.supabase?.createClient) {
+      createClient = window.supabase.createClient;
+    } else {
+      try {
+        ({ createClient } = await import("https://esm.sh/@supabase/supabase-js@2"));
+      } catch {
+        ({ createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"));
+      }
     }
     state.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     setSignInEnabled(true);
