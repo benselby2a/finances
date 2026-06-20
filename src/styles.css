@@ -231,7 +231,6 @@ button.primary {
 
 [data-hub] .auth-gate { display: none !important; }
 [data-hub] .app.hidden { display: block !important; }
-[data-hub] .app-content.hidden { display: block !important; }
 
 #sign-in-form button,
 .auth-secondary-btn {
