@@ -340,6 +340,16 @@ menu {
   background: #f8fafc !important;
 }
 
+.paid-by-section {
+  margin-bottom: 8px;
+}
+
+.field-label {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
 .split-presets {
   display: grid;
   gap: 6px;
@@ -632,6 +642,16 @@ menu {
 }
 
 @media (max-width: 780px) {
+  dialog {
+    width: calc(100vw - 16px);
+    padding: 16px 14px;
+    border-radius: 14px;
+  }
+
+  #payment-form fieldset {
+    padding: 6px 8px 8px;
+  }
+
   .topbar {
     flex-wrap: wrap;
     align-items: center;
@@ -657,7 +677,15 @@ menu {
   }
 
   .payment-meta-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .payment-meta-row > label:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .expense-date-row {
+    grid-template-columns: 1fr;
   }
 
   .two-col {
@@ -666,6 +694,17 @@ menu {
 
   .payments-table-wrap {
     overflow: visible;
+  }
+
+  .card:has(.payments-table-wrap) {
+    border: none;
+    box-shadow: none;
+    background: transparent;
+    padding: 0 2px;
+  }
+
+  .payments-table {
+    border: none;
   }
 
   .payments-table thead {
