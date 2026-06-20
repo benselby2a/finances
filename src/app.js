@@ -2576,7 +2576,7 @@ async function renderRecurringSection() {
         <td data-label="Actions">
           <div style="display:flex; align-items:center; justify-content:flex-end; gap:6px">
             <button type="button" class="icon-btn" data-action="edit-recurring" data-template-id="${r.id}" title="Edit">&#x270E;</button>
-            <label class="active-toggle-label" style="display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:var(--card); font-size:13px; cursor:pointer; line-height:1">
+            <label class="active-toggle-label">
               <input type="checkbox" data-action="toggle-recurring" data-template-id="${r.id}" ${statusChecked} />
               Active
             </label>
