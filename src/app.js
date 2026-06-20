@@ -563,18 +563,18 @@ function renderRecurringImpactPreview() {
   target.innerHTML = `
     <div style="font-weight:600; margin-bottom:6px">Impact on next scheduled payment</div>
     <div style="display:grid; gap:4px">
-      <div>Next date: <strong>${nextBefore ? toDateLabel(nextBefore) : "None"}</strong> <span aria-hidden="true">→</span> <strong>${nextAfter ? toDateLabel(nextAfter) : "None"}</strong>${dateChanged ? ' <span style="color:#b45309">(changed)</span>' : ""}</div>
-      <div>Amount: <strong>${formatGbp(amountBefore)}</strong> <span aria-hidden="true">→</span> <strong>${formatGbp(amountAfter)}</strong>${amountChanged ? ' <span style="color:#b45309">(changed)</span>' : ""}</div>
+      <div>Next date: <strong>${nextBefore ? toDateLabel(nextBefore) : "None"}</strong> <span aria-hidden="true">→</span> <strong>${nextAfter ? toDateLabel(nextAfter) : "None"}</strong>${dateChanged ? ' <span style="color:var(--warn-text)">(changed)</span>' : ""}</div>
+      <div>Amount: <strong>${formatGbp(amountBefore)}</strong> <span aria-hidden="true">→</span> <strong>${formatGbp(amountAfter)}</strong>${amountChanged ? ' <span style="color:var(--warn-text)">(changed)</span>' : ""}</div>
     </div>
   `;
 
   const nextFive = computeNextNDueDates(after, 5);
   if (after.status !== "active") {
-    nextDatesTarget.innerHTML = `<div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div><div style="color:#6b7280">Recurring payment is paused.</div>`;
+    nextDatesTarget.innerHTML = `<div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div><div style="color:var(--muted)">Recurring payment is paused.</div>`;
     return;
   }
   if (!nextFive.length) {
-    nextDatesTarget.innerHTML = `<div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div><div style="color:#6b7280">No upcoming dates.</div>`;
+    nextDatesTarget.innerHTML = `<div style="font-weight:600; margin-bottom:6px">Next 5 Scheduled Dates</div><div style="color:var(--muted)">No upcoming dates.</div>`;
     return;
   }
   nextDatesTarget.innerHTML = `
@@ -2276,7 +2276,7 @@ function renderPaymentRow(p, payerLabels, paymentDetails) {
     <td data-label="Details" class="payment-details-mobile${isSettlement ? " no-details" : ""}">${subtitleHtml}</td>
     <td data-label="Actions" style="text-align:right; white-space:nowrap">
       ${p.is_hypothetical
-        ? `<span style="color:#6b7280; font-size:12px">Projected</span>`
+        ? `<span style="color:var(--muted); font-size:12px">Projected</span>`
         : (isSettlement
           ? `<button type="button" class="icon-btn" data-action="delete" data-payment-id="${p.id}" title="Delete">&#x1F5D1;</button>`
           : `<button type="button" class="icon-btn" data-action="edit" data-payment-id="${p.id}" title="Edit">&#x270E;</button>
@@ -2463,7 +2463,7 @@ async function renderBalances(payments) {
   const balanceRowsHtml = rows
     .map((r) => {
       const label = r.net >= 0 ? "is owed" : "owes";
-      return `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #e5e7eb">
+      return `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line)">
         <span>${escapeHtml(r.name)}</span>
         <strong>${label} ${formatGbp(Math.abs(r.net))}</strong>
       </div>`;
@@ -2475,7 +2475,7 @@ async function renderBalances(payments) {
     ? suggestions
         .map(
           (s) =>
-            `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #e5e7eb">
+            `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line)">
               <span>${escapeHtml(s.from)} pays ${escapeHtml(s.to)}</span>
               <strong>${formatGbp(s.amount)}</strong>
             </div>`
@@ -2576,7 +2576,7 @@ async function renderRecurringSection() {
         <td data-label="Actions">
           <div style="display:flex; align-items:center; justify-content:flex-end; gap:6px">
             <button type="button" class="icon-btn" data-action="edit-recurring" data-template-id="${r.id}" title="Edit">&#x270E;</button>
-            <label class="active-toggle-label" style="display:inline-flex; align-items:center; gap:4px; border:1px solid #dbe1ea; border-radius:8px; padding:6px 8px; background:#fff; font-size:13px; cursor:pointer; line-height:1">
+            <label class="active-toggle-label" style="display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:var(--card); font-size:13px; cursor:pointer; line-height:1">
               <input type="checkbox" data-action="toggle-recurring" data-template-id="${r.id}" ${statusChecked} />
               Active
             </label>
@@ -2799,7 +2799,7 @@ async function renderRemindersSection() {
   target.innerHTML = reminders
     .slice(0, 20)
     .map(
-      (r, idx) => `<div style="padding:6px 0; border-bottom:1px solid #e5e7eb">
+      (r, idx) => `<div style="padding:6px 0; border-bottom:1px solid var(--line)">
         <span>${escapeHtml(r.text)}</span>
       </div>`
     )
@@ -2853,7 +2853,7 @@ async function renderSummaryStats(payments, balanceContext) {
     .slice(0, 3)
     .map((s) => `<div style="padding:4px 0">${escapeHtml(s.from)} owes ${escapeHtml(s.to)} <strong>${formatGbp(s.amount)}</strong></div>`)
     .join("");
-  owesSummary.innerHTML = `<div style="padding:4px 0; color:#374151">${escapeHtml(outstandingMessage)}</div>${owesSummary.innerHTML}`;
+  owesSummary.innerHTML = `<div style="padding:4px 0; color:var(--text-secondary)">${escapeHtml(outstandingMessage)}</div>${owesSummary.innerHTML}`;
 }
 
 async function saveSettlementFromForm(form) {
@@ -2970,9 +2970,9 @@ async function renderSyncLogs() {
   }
 
   const summaryHtml = `
-    <div style="padding:8px 0; border-bottom:1px solid #e5e7eb; margin-bottom:6px">
+    <div style="padding:8px 0; border-bottom:1px solid var(--line); margin-bottom:6px">
       <div style="font-weight:600">Last 10 days recurring status</div>
-      <div style="font-size:13px; color:#6b7280; margin-top:4px">
+      <div style="font-size:13px; color:var(--muted); margin-top:4px">
         created=${counts.created} • already-existed=${counts.skipped_exists} • failed=${counts.failed}${counts.other ? ` • other=${counts.other}` : ""} • missing/deleted generated payments=${missingCount}
       </div>
     </div>
@@ -2983,7 +2983,7 @@ async function renderSyncLogs() {
     .map((r) => {
       const ts = new Date(r.created_at).toLocaleString("en-GB");
       const errorText = r.error_text ? ` - ${escapeHtml(r.error_text)}` : "";
-      return `<div style="padding:4px 0; border-bottom:1px solid #e5e7eb">
+      return `<div style="padding:4px 0; border-bottom:1px solid var(--line)">
         <strong>${escapeHtml(r.status)}</strong> template=${escapeHtml(r.recurring_template_id)} due=${escapeHtml(r.due_date)} at ${escapeHtml(ts)}${r.payment_id ? ` payment=${escapeHtml(r.payment_id)}` : ""}${errorText}
       </div>`;
     })
