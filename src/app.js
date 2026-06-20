@@ -832,13 +832,8 @@ function getOtherMember() {
 }
 
 function applyPaidBySingleUser(userId) {
-  state.members.forEach((m) => {
-    const c = document.querySelector(`[data-paid-by-user='${m.user_id}']`);
-    const pct = document.querySelector(`[data-paid-by-pct='${m.user_id}']`);
-    const selected = m.user_id === userId;
-    if (c) c.checked = selected;
-    if (pct) pct.value = selected ? "100" : "0";
-  });
+  const radio = document.querySelector(`[data-paid-by-user='${userId}']`);
+  if (radio) radio.checked = true;
 }
 
 function renderSplitPresets() {
@@ -1597,37 +1592,25 @@ function renderPaidByRows(prefill = null, options = {}) {
   }
 
   if (target) {
-    const selected = new Map();
+    let selectedUserId = null;
     if (prefill?.length) {
-      for (const p of prefill) selected.set(p.user_id, Number(p.percentage || 0));
+      const best = prefill.reduce((a, b) => (Number(b.percentage || 0) > Number(a.percentage || 0) ? b : a), prefill[0]);
+      selectedUserId = best.user_id;
     } else if (state.currentUser?.id) {
-      selected.set(state.currentUser.id, 100);
+      selectedUserId = state.currentUser.id;
     }
     target.innerHTML = state.members
       .map((m) => {
-        const pct = selected.get(m.user_id) || 0;
-        const checked = pct > 0 ? "checked" : "";
-        return `<div style="display:grid; grid-template-columns: 1fr 110px; gap:8px; align-items:center; margin-bottom:6px">
-          <label class="inline">
-            <input type="checkbox" data-paid-by-user="${m.user_id}" ${checked} />
-            ${escapeHtml(memberNameByUserId(m.user_id))}
-          </label>
-          <input type="number" min="0" max="100" step="0.01" data-paid-by-pct="${m.user_id}" value="${pct}" />
-        </div>`;
+        const checked = m.user_id === selectedUserId ? "checked" : "";
+        return `<label class="inline" style="margin-bottom:4px">
+          <input type="radio" name="paid_by_user" data-paid-by-user="${m.user_id}" ${checked} />
+          ${escapeHtml(memberNameByUserId(m.user_id))}
+        </label>`;
       })
       .join("");
 
-    target.querySelectorAll("[data-paid-by-user], [data-paid-by-pct]").forEach((el) => {
+    target.querySelectorAll("[data-paid-by-user]").forEach((el) => {
       el.addEventListener("change", () => updatePaymentNetEffectPreview());
-      el.addEventListener("input", () => {
-        if (state.debouncedNetEffectUpdate) state.debouncedNetEffectUpdate();
-        else updatePaymentNetEffectPreview();
-      });
-      if (el.hasAttribute("data-paid-by-pct")) {
-        el.addEventListener("blur", () => {
-          updateSplitValidationBanner(true);
-        });
-      }
     });
   }
   renderSplitRows();
@@ -1754,61 +1737,30 @@ function renderSplitRows(prefill = null) {
 }
 
 function getPaidByAllocations(amount) {
-  const checks = Array.from(document.querySelectorAll("[data-paid-by-user]"));
-  if (!checks.length) {
-    const other = getOtherMember();
-    let payerUserId = state.currentUser?.id || state.members[0]?.user_id;
-    if (state.splitMode === "preset_other_equal" || state.splitMode === "preset_other_full") {
-      payerUserId = other?.user_id || payerUserId;
-    }
-    if (!payerUserId) throw new Error("No payer found.");
-    return [{ user_id: payerUserId, amount: Number(amount.toFixed(2)), pct: 100 }];
+  const selected = document.querySelector("[data-paid-by-user]:checked");
+  if (selected) {
+    return [{ user_id: selected.getAttribute("data-paid-by-user"), amount: Number(amount.toFixed(2)), pct: 100 }];
   }
-  const selected = [];
-  for (const c of checks) {
-    const userId = c.getAttribute("data-paid-by-user");
-    const pctInput = document.querySelector(`[data-paid-by-pct='${userId}']`);
-    const pct = Number(pctInput?.value || 0);
-    if (c.checked && pct > 0) selected.push({ user_id: userId, pct });
+  const other = getOtherMember();
+  let payerUserId = state.currentUser?.id || state.members[0]?.user_id;
+  if (state.splitMode === "preset_other_equal" || state.splitMode === "preset_other_full") {
+    payerUserId = other?.user_id || payerUserId;
   }
-  if (!selected.length) throw new Error("Select at least one payer with a percentage.");
-
-  const totalPct = selected.reduce((sum, r) => sum + r.pct, 0);
-  if (totalPct <= 0) throw new Error("Paid-by percentage total must be greater than 0.");
-  if (Math.abs(totalPct - 100) > 0.01) {
-    throw new Error(`Paid-by percentage total must equal 100% (currently ${totalPct.toFixed(2)}%).`);
-  }
-
-  const rows = selected.map((r) => ({
-    user_id: r.user_id,
-    amount: Number(((amount * r.pct) / totalPct).toFixed(2)),
-    pct: Number(((r.pct / totalPct) * 100).toFixed(4))
-  }));
-  const roundedTotal = rows.reduce((s, r) => s + r.amount, 0);
-  const delta = Number((amount - roundedTotal).toFixed(2));
-  if (Math.abs(delta) >= 0.01 && rows.length) rows[0].amount = Number((rows[0].amount + delta).toFixed(2));
-  return rows;
+  if (!payerUserId) throw new Error("No payer found.");
+  return [{ user_id: payerUserId, amount: Number(amount.toFixed(2)), pct: 100 }];
 }
 
 function getPaidBySelectionSummary() {
-  const checks = Array.from(document.querySelectorAll("[data-paid-by-user]"));
-  if (!checks.length) {
-    const other = getOtherMember();
-    let payerUserId = state.currentUser?.id || state.members[0]?.user_id;
-    if (state.splitMode === "preset_other_equal" || state.splitMode === "preset_other_full") {
-      payerUserId = other?.user_id || payerUserId;
-    }
-    return { selected: payerUserId ? [{ user_id: payerUserId, pct: 100 }] : [], totalPct: payerUserId ? 100 : 0 };
+  const selected = document.querySelector("[data-paid-by-user]:checked");
+  if (selected) {
+    return { selected: [{ user_id: selected.getAttribute("data-paid-by-user"), pct: 100 }], totalPct: 100 };
   }
-  const selected = [];
-  for (const c of checks) {
-    const userId = c.getAttribute("data-paid-by-user");
-    const pctInput = document.querySelector(`[data-paid-by-pct='${userId}']`);
-    const pct = Number(pctInput?.value || 0);
-    if (c.checked) selected.push({ user_id: userId, pct });
+  const other = getOtherMember();
+  let payerUserId = state.currentUser?.id || state.members[0]?.user_id;
+  if (state.splitMode === "preset_other_equal" || state.splitMode === "preset_other_full") {
+    payerUserId = other?.user_id || payerUserId;
   }
-  const totalPct = selected.reduce((sum, r) => sum + Number(r.pct || 0), 0);
-  return { selected, totalPct: Number(totalPct.toFixed(2)) };
+  return { selected: payerUserId ? [{ user_id: payerUserId, pct: 100 }] : [], totalPct: payerUserId ? 100 : 0 };
 }
 
 function getSplitSelectionSummary(amount) {
