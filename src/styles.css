@@ -694,6 +694,24 @@ menu {
   gap: 6px;
 }
 
+.active-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--surface-input);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.active-toggle-label input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;
