@@ -4,11 +4,27 @@
   --bg-grad-2: #eef8f3;
   --card: #ffffff;
   --text: #111827;
+  --text-secondary: #374151;
   --muted: #6b7280;
   --line: #dbe1ea;
   --line-strong: #c4ccd8;
   --accent: #0f766e;
   --accent-soft: #e6f7f4;
+  --surface-raised: #f8fafc;
+  --surface-input: #fcfdff;
+  --focus-ring: #7aa8f7;
+  --focus-glow: rgba(59, 130, 246, 0.15);
+  --warn-bg: #fffbeb;
+  --warn-border: #f59e0b;
+  --warn-text: #92400e;
+  --cash-bg: #f3fbf6;
+  --cash-bg-alt: #edf8f1;
+  --hypo-bg: #eef6ff;
+  --hypo-border: #cfe2ff;
+  --hypo-line: #d9e8ff;
+  --selected-bg: #eef4ff;
+  --selected-border: #8ab4f8;
+  --expiring-bg: #fff7ed;
   --radius-sm: 10px;
   --radius-md: 14px;
   --radius-lg: 18px;
@@ -18,8 +34,42 @@
   --space-3: 14px;
 }
 
+[data-theme="dark"] {
+  --bg: #111827;
+  --bg-grad-1: #111827;
+  --bg-grad-2: #111827;
+  --card: #1f2937;
+  --text: #f3f4f6;
+  --text-secondary: #d1d5db;
+  --muted: #9ca3af;
+  --line: #374151;
+  --line-strong: #4b5563;
+  --accent: #14b8a6;
+  --accent-soft: #1a2e2b;
+  --surface-raised: #374151;
+  --surface-input: #1f2937;
+  --focus-ring: #60a5fa;
+  --focus-glow: rgba(96, 165, 250, 0.2);
+  --warn-bg: #3b2f1a;
+  --warn-border: #d97706;
+  --warn-text: #fbbf24;
+  --cash-bg: #1a2e22;
+  --cash-bg-alt: #1a2e22;
+  --hypo-bg: #1a2540;
+  --hypo-border: #2d4a7a;
+  --hypo-line: #2d4a7a;
+  --selected-bg: #1e3a5f;
+  --selected-border: #60a5fa;
+  --expiring-bg: #3b2f1a;
+  --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
 * {
   box-sizing: border-box;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {
@@ -96,7 +146,7 @@ button:hover {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--bg);
 }
 
 .icon-btn {
@@ -133,8 +183,8 @@ button.primary {
 }
 
 .hypothetical-card {
-  background: #eef6ff;
-  border-color: #cfe2ff;
+  background: var(--hypo-bg);
+  border-color: var(--hypo-border);
 }
 
 .hypothetical-row {
@@ -142,11 +192,11 @@ button.primary {
   justify-content: space-between;
   gap: 10px;
   padding: 6px 0;
-  border-bottom: 1px solid #d9e8ff;
+  border-bottom: 1px solid var(--hypo-line);
 }
 
 .payments-table tbody tr.hypothetical-payment-row {
-  background: #eef6ff !important;
+  background: var(--hypo-bg) !important;
 }
 
 .toggle-label {
@@ -169,7 +219,7 @@ button.primary {
   text-align: left;
   font-size: 1.5em;
   font-weight: 600;
-  background: #f8fbff;
+  background: var(--surface-raised);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -181,7 +231,7 @@ button.primary {
 
 .accordion-indicator {
   display: inline-block;
-  color: #6b7280;
+  color: var(--muted);
   transform: rotate(-90deg);
   transition: transform 140ms ease;
   font-size: 14px;
@@ -280,7 +330,7 @@ form > h3 {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 8px 10px 10px;
-  background: #fcfdff;
+  background: var(--surface-input);
 }
 
 #payment-form fieldset legend {
@@ -301,15 +351,16 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 10px 11px;
-  background: #fcfdff;
+  background: var(--surface-input);
+  color: var(--text);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: #7aa8f7;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-glow);
 }
 
 .inline {
@@ -336,7 +387,7 @@ menu {
   border-radius: 999px !important;
   padding: 6px 12px;
   font-size: 13px;
-  background: #f8fafc !important;
+  background: var(--surface-raised) !important;
 }
 
 .paid-by-section {
@@ -385,14 +436,14 @@ menu {
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #f9fafb;
+  background: var(--surface-raised);
   font-size: 14px;
   font-weight: 600;
 }
 
 .kind-option input:checked + span {
-  border-color: #8ab4f8;
-  background: #eef4ff;
+  border-color: var(--selected-border);
+  background: var(--selected-bg);
 }
 
 #recurring-fields > label {
@@ -406,7 +457,7 @@ menu {
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 7px 8px;
-  background: #fcfdff;
+  background: var(--surface-input);
 }
 
 .split-preset input[type="radio"] {
@@ -429,9 +480,9 @@ menu {
 
 .warning-banner {
   margin-top: 8px;
-  border: 1px solid #f59e0b;
-  background: #fffbeb;
-  color: #92400e;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 13px;
@@ -483,8 +534,8 @@ menu {
   left: 50%;
   top: 16px;
   transform: translateX(-50%);
-  background: #111827;
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   padding: 12px 14px;
   border-radius: 10px;
   max-width: 420px;
@@ -496,8 +547,8 @@ menu {
   left: 50%;
   top: 12px;
   transform: translateX(-50%);
-  background: #111827;
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   padding: 10px 12px;
   border-radius: 10px;
   max-width: min(520px, calc(100% - 24px));
@@ -513,8 +564,8 @@ menu {
   border-radius: 999px;
   padding: 2px 8px;
   font-size: 12px;
-  color: #374151;
-  background: #f9fafb;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
 }
 
 .payments-table-wrap {
@@ -534,7 +585,7 @@ menu {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #f8fafc;
+  background: var(--surface-raised);
   border-bottom: 1px solid var(--line-strong);
   font-weight: 700;
   font-size: 15px;
@@ -553,15 +604,15 @@ menu {
 }
 
 .payments-table tbody tr:nth-child(even) {
-  background: #fcfdff;
+  background: var(--surface-input);
 }
 
 .payments-table tbody tr.cash-row {
-  background: #f3fbf6;
+  background: var(--cash-bg);
 }
 
 .payments-table tbody tr.cash-row:nth-child(even) {
-  background: #edf8f1;
+  background: var(--cash-bg-alt);
 }
 
 .payment-title {
@@ -577,13 +628,13 @@ menu {
 
 .payment-result-line {
   font-size: 12px;
-  color: #374151;
+  color: var(--text-secondary);
   margin-top: 4px;
   font-weight: 600;
 }
 
 .net-effect-card {
-  background: #f8fafc;
+  background: var(--surface-raised);
   border-color: var(--line);
   box-shadow: none;
 }
@@ -591,7 +642,7 @@ menu {
 .net-effect-card .net-effect-title {
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: var(--text-secondary);
   margin-bottom: 4px;
 }
 
@@ -604,7 +655,7 @@ menu {
 
 .net-effect-card .net-effect-result {
   font-size: 12px;
-  color: #1f2937;
+  color: var(--text);
   margin-top: 4px;
   font-weight: 600;
   line-height: 1.3;
@@ -615,7 +666,7 @@ menu {
 }
 
 .recurring-expiring-soon {
-  background: #fff7ed;
+  background: var(--expiring-bg);
   border-radius: 10px;
   padding-left: 8px !important;
   padding-right: 8px !important;
@@ -723,7 +774,7 @@ menu {
     border-radius: var(--radius-md);
     padding: 8px;
     margin-bottom: 10px;
-    background: #fff;
+    background: var(--card);
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
@@ -740,7 +791,7 @@ menu {
   }
 
   .payments-table tbody tr.cash-row {
-    background: #f3fbf6;
+    background: var(--cash-bg);
   }
 
   .payments-table tbody td::before {
