@@ -1602,7 +1602,7 @@ function renderPaidByRows(prefill = null, options = {}) {
     target.innerHTML = state.members
       .map((m) => {
         const checked = m.user_id === selectedUserId ? "checked" : "";
-        return `<label class="inline" style="margin-bottom:4px">
+        return `<label class="inline">
           <input type="radio" name="paid_by_user" data-paid-by-user="${m.user_id}" ${checked} />
           ${escapeHtml(memberNameByUserId(m.user_id))}
         </label>`;
@@ -1723,12 +1723,13 @@ function renderSplitRows(prefill = null) {
   target.querySelectorAll("[data-split-user], [data-split-value]").forEach((el) => {
     el.addEventListener("input", (e) => {
       if (e.target.hasAttribute("data-split-value") && state.members.length === 2 &&
-          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "ratio")) {
+          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "fixed")) {
         const changedUserId = e.target.getAttribute("data-split-value");
         const otherInput = target.querySelector(`[data-split-value]:not([data-split-value="${changedUserId}"])`);
         if (otherInput) {
           const val = Number(e.target.value || 0);
-          otherInput.value = Math.max(0, Number((100 - val).toFixed(2)));
+          const total = state.advancedOwesMode === "percentage" ? 100 : Number(document.querySelector("#payment-form input[name='amount']")?.value || 0);
+          otherInput.value = Math.max(0, Number((total - val).toFixed(2)));
         }
       }
       updateSplitValidationBanner(false);
@@ -1737,12 +1738,13 @@ function renderSplitRows(prefill = null) {
     });
     el.addEventListener("change", (e) => {
       if (e.target.hasAttribute("data-split-value") && state.members.length === 2 &&
-          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "ratio")) {
+          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "fixed")) {
         const changedUserId = e.target.getAttribute("data-split-value");
         const otherInput = target.querySelector(`[data-split-value]:not([data-split-value="${changedUserId}"])`);
         if (otherInput) {
           const val = Number(e.target.value || 0);
-          otherInput.value = Math.max(0, Number((100 - val).toFixed(2)));
+          const total = state.advancedOwesMode === "percentage" ? 100 : Number(document.querySelector("#payment-form input[name='amount']")?.value || 0);
+          otherInput.value = Math.max(0, Number((total - val).toFixed(2)));
         }
       }
       updateSplitValidationBanner(false);

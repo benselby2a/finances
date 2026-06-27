@@ -899,4 +899,20 @@ menu {
   .payment-details-mobile {
     display: block;
   }
+
+  .payments-table tbody td[data-label="Name"] {
+    grid-area: title;
+  }
+
+  .payments-table tbody td[data-label="Frequency"] {
+    display: none;
+  }
+
+  .payments-table tbody td[data-label="Start"] {
+    grid-area: date;
+  }
+
+  .payments-table tbody td[data-label="End"] {
+    grid-area: details;
+  }
 }
