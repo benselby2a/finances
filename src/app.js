@@ -1721,12 +1721,30 @@ function renderSplitRows(prefill = null) {
     })
     .join("");
   target.querySelectorAll("[data-split-user], [data-split-value]").forEach((el) => {
-    el.addEventListener("input", () => {
+    el.addEventListener("input", (e) => {
+      if (e.target.hasAttribute("data-split-value") && state.members.length === 2 &&
+          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "ratio")) {
+        const changedUserId = e.target.getAttribute("data-split-value");
+        const otherInput = target.querySelector(`[data-split-value]:not([data-split-value="${changedUserId}"])`);
+        if (otherInput) {
+          const val = Number(e.target.value || 0);
+          otherInput.value = Math.max(0, Number((100 - val).toFixed(2)));
+        }
+      }
       updateSplitValidationBanner(false);
       if (state.debouncedNetEffectUpdate) state.debouncedNetEffectUpdate();
       else updatePaymentNetEffectPreview();
     });
-    el.addEventListener("change", () => {
+    el.addEventListener("change", (e) => {
+      if (e.target.hasAttribute("data-split-value") && state.members.length === 2 &&
+          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "ratio")) {
+        const changedUserId = e.target.getAttribute("data-split-value");
+        const otherInput = target.querySelector(`[data-split-value]:not([data-split-value="${changedUserId}"])`);
+        if (otherInput) {
+          const val = Number(e.target.value || 0);
+          otherInput.value = Math.max(0, Number((100 - val).toFixed(2)));
+        }
+      }
       updateSplitValidationBanner(false);
       updatePaymentNetEffectPreview();
     });
