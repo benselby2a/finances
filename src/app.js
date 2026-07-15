@@ -307,7 +307,7 @@ function setupModals() {
     btn.addEventListener("click", () => {
       const form = document.getElementById("payment-form");
       if (!form) return;
-      const today = new Date();
+      const today = localTodayUtc();
       const mode = btn.getAttribute("data-quick-date");
       if (mode === "today") form.payment_date.value = toIsoDate(today);
       if (mode === "yesterday") {
@@ -463,7 +463,7 @@ function computeNextDueDateForTemplate(template, now = new Date()) {
   const start = new Date(`${template.start_date}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
   const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
   if (end && end < todayUtc) return null;
 
   if (template.frequency === "annual") {
@@ -697,11 +697,28 @@ function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+// A UTC-midnight instant carrying the browser's LOCAL calendar date. Using
+// this (instead of `new Date()`'s raw UTC getters) keeps "today" aligned with
+// the user's actual day even when local time is ahead of UTC (e.g. BST),
+// which otherwise makes due/generated dates land a day late.
+function localTodayUtc() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+function localTodayIsoDate() {
+  return toIsoDate(localTodayUtc());
+}
+
+function isFutureDated(dateStr) {
+  return Boolean(dateStr) && String(dateStr) > localTodayIsoDate();
+}
+
 function setDefaultPaymentDateIfEmpty() {
   const form = document.getElementById("payment-form");
   if (!form) return;
   if (!form.payment_date.value) {
-    form.payment_date.value = toIsoDate(new Date());
+    form.payment_date.value = localTodayIsoDate();
   }
 }
 
@@ -715,7 +732,7 @@ function syncRecurringTemplateCategoryOptions() {
 function setDefaultRecurringDates() {
   const form = document.getElementById("payment-form");
   if (!form) return;
-  const today = new Date();
+  const today = localTodayUtc();
   const oneYearLater = new Date(today);
   oneYearLater.setUTCFullYear(oneYearLater.getUTCFullYear() + 1);
 
@@ -756,7 +773,8 @@ function updateSettlementSaveState() {
 
 async function getTopSettlementSuggestion() {
   const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-    p_household_id: state.householdId
+    p_household_id: state.householdId,
+    p_as_of_date: localTodayIsoDate()
   });
   if (error) throw error;
   const creditors = [];
@@ -788,7 +806,7 @@ async function openSettlementModal(prefill = null) {
   const form = document.getElementById("settlement-form");
   if (!modal || !form) return;
   populateSettlementPartyOptions();
-  form.payment_date.value = toIsoDate(new Date());
+  form.payment_date.value = localTodayIsoDate();
   form.amount.value = "";
   if (form.notes) form.notes.value = "";
   const hint = document.getElementById("settlement-outstanding-hint");
@@ -1078,8 +1096,7 @@ async function processRecurringPayments() {
     splitsByTemplate.get(row.recurring_template_id).push(row);
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = localTodayUtc();
 
   for (const t of templates) {
     const dueDates = computeDueDates(t, today).slice(0, RECURRING_MAX_BACKFILL_PER_TEMPLATE);
@@ -1232,7 +1249,7 @@ async function renderHypotheticalUpcoming() {
     .limit(500);
   if (error) throw error;
 
-  const today = new Date();
+  const today = localTodayUtc();
   const horizon = new Date(today);
   horizon.setUTCDate(horizon.getUTCDate() + 30);
 
@@ -2266,6 +2283,8 @@ async function buildPaymentMeta(payments) {
 
 function renderPaymentRow(p, payerLabels, paymentDetails) {
   const isSettlement = p.source_type === "settlement";
+  const isFutureReal = !p.is_hypothetical && !isSettlement && isFutureDated(p.payment_date);
+  const isProjected = p.is_hypothetical || isFutureReal;
   const payer = p.is_hypothetical
     ? (p.hypothetical_payer_name || memberNameByUserId(p.created_by) || "—")
     : (payerLabels?.get(p.id) || memberNameByUserId(p.created_by));
@@ -2273,8 +2292,9 @@ function renderPaymentRow(p, payerLabels, paymentDetails) {
   const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
   const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
   const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
-  const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
+  const rowClass = isProjected ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
   const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Projected from recurring payment</div>` : ""}
+      ${!isSettlement && isFutureReal ? `<div class="payment-meta-line">Projected (future dated, excluded from totals)</div>` : ""}
       ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
@@ -2311,16 +2331,23 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypot
   const target = document.getElementById("payments-list");
   const showProjected = document.getElementById("show-projected")?.checked ?? true;
   const toggleLabel = document.getElementById("show-projected-toggle");
+  const hasFutureRealPayments = (payments || []).some(
+    (p) => p.source_type !== "settlement" && isFutureDated(p.payment_date)
+  );
 
-  if (hypotheticalRows.length) {
+  if (hypotheticalRows.length || hasFutureRealPayments) {
     toggleLabel?.classList.remove("hidden");
   } else {
     toggleLabel?.classList.add("hidden");
   }
 
+  const visiblePayments = showProjected
+    ? (payments || [])
+    : (payments || []).filter((p) => p.source_type === "settlement" || !isFutureDated(p.payment_date));
+
   const combined = [
     ...(showProjected ? (hypotheticalRows || []).slice(0, 100) : []),
-    ...(payments || []).slice(0, 200)
+    ...visiblePayments.slice(0, 200)
   ];
 
   if (!combined.length) {
@@ -2451,7 +2478,8 @@ async function renderBalances(payments) {
   const target = document.getElementById("balances-list");
   if (!target) {
     const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-      p_household_id: state.householdId
+      p_household_id: state.householdId,
+      p_as_of_date: localTodayIsoDate()
     });
     if (error) throw error;
     const rows = (data || [])
@@ -2466,7 +2494,8 @@ async function renderBalances(payments) {
     return { balances, suggestions };
   }
   const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-    p_household_id: state.householdId
+    p_household_id: state.householdId,
+    p_as_of_date: localTodayIsoDate()
   });
   if (error) throw error;
 
@@ -2729,7 +2758,7 @@ async function renderRemindersSection() {
   }
 
   const now = new Date();
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayUtc = localTodayUtc();
   const inSevenDaysUtc = new Date(todayUtc);
   inSevenDaysUtc.setUTCDate(inSevenDaysUtc.getUTCDate() + 7);
   const reminders = [];
@@ -2835,7 +2864,8 @@ async function renderSummaryStats(payments, balanceContext) {
   let suggestions = balanceContext?.suggestions || [];
   try {
     const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-      p_household_id: state.householdId
+      p_household_id: state.householdId,
+      p_as_of_date: localTodayIsoDate()
     });
     if (error) throw error;
     const rows = (data || []).map((r) => ({
