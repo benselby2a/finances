@@ -772,17 +772,12 @@ function updateSettlementSaveState() {
 }
 
 async function getTopSettlementSuggestion() {
-  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-    p_household_id: state.householdId,
-    p_as_of_date: localTodayIsoDate()
-  });
-  if (error) throw error;
+  const rows = await getHouseholdBalanceRows();
   const creditors = [];
   const debtors = [];
-  for (const r of data || []) {
-    const net = Number(r.net || 0);
-    if (net > 0.009) creditors.push({ userId: r.user_id, amount: Number(net.toFixed(2)) });
-    if (net < -0.009) debtors.push({ userId: r.user_id, amount: Number(Math.abs(net).toFixed(2)) });
+  for (const r of rows) {
+    if (r.net > 0.009) creditors.push({ userId: r.userId, amount: Number(r.net.toFixed(2)) });
+    if (r.net < -0.009) debtors.push({ userId: r.userId, amount: Number(Math.abs(r.net).toFixed(2)) });
   }
   creditors.sort((a, b) => b.amount - a.amount);
   debtors.sort((a, b) => b.amount - a.amount);
@@ -2473,39 +2468,70 @@ function applyOptimisticPaymentMutation(mutation) {
   renderPayments(state.loadedPayments || [], new Map(), new Map(), state.lastHypotheticalRows || []);
 }
 
+// Payments dated after "today" are shown as projected and must not affect
+// balances yet. The balances RPC has no notion of "future" (it aggregates
+// all non-deleted payments), so rather than changing the DB function we
+// pull the contribution/split rows for just the future-dated payments here
+// and net them back out of the RPC's totals client-side.
+async function fetchFutureBalanceAdjustment() {
+  const adjustment = new Map();
+  const { data: futurePayments, error } = await state.supabase
+    .schema("finance_app")
+    .from("payments")
+    .select("id")
+    .eq("household_id", state.householdId)
+    .is("deleted_at", null)
+    .gt("payment_date", localTodayIsoDate());
+  if (error) throw error;
+
+  const futureIds = (futurePayments || []).map((p) => p.id);
+  if (!futureIds.length) return adjustment;
+
+  const [contribRes, splitsRes] = await Promise.all([
+    state.supabase.schema("finance_app").from("payment_contributions").select("user_id, amount").in("payment_id", futureIds),
+    state.supabase.schema("finance_app").from("payment_splits").select("user_id, amount").in("payment_id", futureIds)
+  ]);
+  if (contribRes.error) throw contribRes.error;
+  if (splitsRes.error) throw splitsRes.error;
+
+  for (const c of contribRes.data || []) {
+    adjustment.set(c.user_id, (adjustment.get(c.user_id) || 0) + Number(c.amount || 0));
+  }
+  for (const s of splitsRes.data || []) {
+    adjustment.set(s.user_id, (adjustment.get(s.user_id) || 0) - Number(s.amount || 0));
+  }
+  return adjustment;
+}
+
+async function getHouseholdBalanceRows() {
+  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
+    p_household_id: state.householdId
+  });
+  if (error) throw error;
+  const adjustment = await fetchFutureBalanceAdjustment();
+
+  return (data || [])
+    .map((r) => {
+      const rawNet = Number(r.net || 0) - (adjustment.get(r.user_id) || 0);
+      return {
+        userId: r.user_id,
+        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
+        net: Number(rawNet.toFixed(2))
+      };
+    })
+    .sort((a, b) => b.net - a.net);
+}
+
 async function renderBalances(payments) {
   void payments;
   const target = document.getElementById("balances-list");
   if (!target) {
-    const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-      p_household_id: state.householdId,
-      p_as_of_date: localTodayIsoDate()
-    });
-    if (error) throw error;
-    const rows = (data || [])
-      .map((r) => ({
-        userId: r.user_id,
-        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-        net: Number(r.net || 0)
-      }))
-      .sort((a, b) => b.net - a.net);
+    const rows = await getHouseholdBalanceRows();
     const balances = new Map(rows.map((r) => [r.userId, r.net]));
     const suggestions = buildSettlementSuggestions(rows);
     return { balances, suggestions };
   }
-  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-    p_household_id: state.householdId,
-    p_as_of_date: localTodayIsoDate()
-  });
-  if (error) throw error;
-
-  const rows = (data || [])
-    .map((r) => ({
-      userId: r.user_id,
-      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-      net: Number(r.net || 0)
-    }))
-    .sort((a, b) => b.net - a.net);
+  const rows = await getHouseholdBalanceRows();
 
   const balances = new Map(rows.map((r) => [r.userId, r.net]));
 
@@ -2863,15 +2889,7 @@ async function renderSummaryStats(payments, balanceContext) {
 
   let suggestions = balanceContext?.suggestions || [];
   try {
-    const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-      p_household_id: state.householdId,
-      p_as_of_date: localTodayIsoDate()
-    });
-    if (error) throw error;
-    const rows = (data || []).map((r) => ({
-      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-      net: Number(r.net || 0)
-    }));
+    const rows = await getHouseholdBalanceRows();
     const live = buildSettlementSuggestions(rows);
     if (live.length) suggestions = live;
   } catch (error) {
