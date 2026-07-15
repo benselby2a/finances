@@ -307,7 +307,7 @@ function setupModals() {
     btn.addEventListener("click", () => {
       const form = document.getElementById("payment-form");
       if (!form) return;
-      const today = new Date();
+      const today = localTodayUtc();
       const mode = btn.getAttribute("data-quick-date");
       if (mode === "today") form.payment_date.value = toIsoDate(today);
       if (mode === "yesterday") {
@@ -463,7 +463,7 @@ function computeNextDueDateForTemplate(template, now = new Date()) {
   const start = new Date(`${template.start_date}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
   const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
   if (end && end < todayUtc) return null;
 
   if (template.frequency === "annual") {
@@ -697,11 +697,28 @@ function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+// A UTC-midnight instant carrying the browser's LOCAL calendar date. Using
+// this (instead of `new Date()`'s raw UTC getters) keeps "today" aligned with
+// the user's actual day even when local time is ahead of UTC (e.g. BST),
+// which otherwise makes due/generated dates land a day late.
+function localTodayUtc() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+function localTodayIsoDate() {
+  return toIsoDate(localTodayUtc());
+}
+
+function isFutureDated(dateStr) {
+  return Boolean(dateStr) && String(dateStr) > localTodayIsoDate();
+}
+
 function setDefaultPaymentDateIfEmpty() {
   const form = document.getElementById("payment-form");
   if (!form) return;
   if (!form.payment_date.value) {
-    form.payment_date.value = toIsoDate(new Date());
+    form.payment_date.value = localTodayIsoDate();
   }
 }
 
@@ -715,7 +732,7 @@ function syncRecurringTemplateCategoryOptions() {
 function setDefaultRecurringDates() {
   const form = document.getElementById("payment-form");
   if (!form) return;
-  const today = new Date();
+  const today = localTodayUtc();
   const oneYearLater = new Date(today);
   oneYearLater.setUTCFullYear(oneYearLater.getUTCFullYear() + 1);
 
@@ -755,16 +772,12 @@ function updateSettlementSaveState() {
 }
 
 async function getTopSettlementSuggestion() {
-  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-    p_household_id: state.householdId
-  });
-  if (error) throw error;
+  const rows = await getHouseholdBalanceRows();
   const creditors = [];
   const debtors = [];
-  for (const r of data || []) {
-    const net = Number(r.net || 0);
-    if (net > 0.009) creditors.push({ userId: r.user_id, amount: Number(net.toFixed(2)) });
-    if (net < -0.009) debtors.push({ userId: r.user_id, amount: Number(Math.abs(net).toFixed(2)) });
+  for (const r of rows) {
+    if (r.net > 0.009) creditors.push({ userId: r.userId, amount: Number(r.net.toFixed(2)) });
+    if (r.net < -0.009) debtors.push({ userId: r.userId, amount: Number(Math.abs(r.net).toFixed(2)) });
   }
   creditors.sort((a, b) => b.amount - a.amount);
   debtors.sort((a, b) => b.amount - a.amount);
@@ -788,7 +801,7 @@ async function openSettlementModal(prefill = null) {
   const form = document.getElementById("settlement-form");
   if (!modal || !form) return;
   populateSettlementPartyOptions();
-  form.payment_date.value = toIsoDate(new Date());
+  form.payment_date.value = localTodayIsoDate();
   form.amount.value = "";
   if (form.notes) form.notes.value = "";
   const hint = document.getElementById("settlement-outstanding-hint");
@@ -1078,8 +1091,7 @@ async function processRecurringPayments() {
     splitsByTemplate.get(row.recurring_template_id).push(row);
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = localTodayUtc();
 
   for (const t of templates) {
     const dueDates = computeDueDates(t, today).slice(0, RECURRING_MAX_BACKFILL_PER_TEMPLATE);
@@ -1232,7 +1244,7 @@ async function renderHypotheticalUpcoming() {
     .limit(500);
   if (error) throw error;
 
-  const today = new Date();
+  const today = localTodayUtc();
   const horizon = new Date(today);
   horizon.setUTCDate(horizon.getUTCDate() + 30);
 
@@ -2266,6 +2278,8 @@ async function buildPaymentMeta(payments) {
 
 function renderPaymentRow(p, payerLabels, paymentDetails) {
   const isSettlement = p.source_type === "settlement";
+  const isFutureReal = !p.is_hypothetical && !isSettlement && isFutureDated(p.payment_date);
+  const isProjected = p.is_hypothetical || isFutureReal;
   const payer = p.is_hypothetical
     ? (p.hypothetical_payer_name || memberNameByUserId(p.created_by) || "—")
     : (payerLabels?.get(p.id) || memberNameByUserId(p.created_by));
@@ -2273,8 +2287,9 @@ function renderPaymentRow(p, payerLabels, paymentDetails) {
   const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
   const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
   const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
-  const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
+  const rowClass = isProjected ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
   const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Projected from recurring payment</div>` : ""}
+      ${!isSettlement && isFutureReal ? `<div class="payment-meta-line">Projected (future dated, excluded from totals)</div>` : ""}
       ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
@@ -2311,16 +2326,23 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypot
   const target = document.getElementById("payments-list");
   const showProjected = document.getElementById("show-projected")?.checked ?? true;
   const toggleLabel = document.getElementById("show-projected-toggle");
+  const hasFutureRealPayments = (payments || []).some(
+    (p) => p.source_type !== "settlement" && isFutureDated(p.payment_date)
+  );
 
-  if (hypotheticalRows.length) {
+  if (hypotheticalRows.length || hasFutureRealPayments) {
     toggleLabel?.classList.remove("hidden");
   } else {
     toggleLabel?.classList.add("hidden");
   }
 
+  const visiblePayments = showProjected
+    ? (payments || [])
+    : (payments || []).filter((p) => p.source_type === "settlement" || !isFutureDated(p.payment_date));
+
   const combined = [
     ...(showProjected ? (hypotheticalRows || []).slice(0, 100) : []),
-    ...(payments || []).slice(0, 200)
+    ...visiblePayments.slice(0, 200)
   ];
 
   if (!combined.length) {
@@ -2446,37 +2468,70 @@ function applyOptimisticPaymentMutation(mutation) {
   renderPayments(state.loadedPayments || [], new Map(), new Map(), state.lastHypotheticalRows || []);
 }
 
-async function renderBalances(payments) {
-  void payments;
-  const target = document.getElementById("balances-list");
-  if (!target) {
-    const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-      p_household_id: state.householdId
-    });
-    if (error) throw error;
-    const rows = (data || [])
-      .map((r) => ({
-        userId: r.user_id,
-        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-        net: Number(r.net || 0)
-      }))
-      .sort((a, b) => b.net - a.net);
-    const balances = new Map(rows.map((r) => [r.userId, r.net]));
-    const suggestions = buildSettlementSuggestions(rows);
-    return { balances, suggestions };
+// Payments dated after "today" are shown as projected and must not affect
+// balances yet. The balances RPC has no notion of "future" (it aggregates
+// all non-deleted payments), so rather than changing the DB function we
+// pull the contribution/split rows for just the future-dated payments here
+// and net them back out of the RPC's totals client-side.
+async function fetchFutureBalanceAdjustment() {
+  const adjustment = new Map();
+  const { data: futurePayments, error } = await state.supabase
+    .schema("finance_app")
+    .from("payments")
+    .select("id")
+    .eq("household_id", state.householdId)
+    .is("deleted_at", null)
+    .gt("payment_date", localTodayIsoDate());
+  if (error) throw error;
+
+  const futureIds = (futurePayments || []).map((p) => p.id);
+  if (!futureIds.length) return adjustment;
+
+  const [contribRes, splitsRes] = await Promise.all([
+    state.supabase.schema("finance_app").from("payment_contributions").select("user_id, amount").in("payment_id", futureIds),
+    state.supabase.schema("finance_app").from("payment_splits").select("user_id, amount").in("payment_id", futureIds)
+  ]);
+  if (contribRes.error) throw contribRes.error;
+  if (splitsRes.error) throw splitsRes.error;
+
+  for (const c of contribRes.data || []) {
+    adjustment.set(c.user_id, (adjustment.get(c.user_id) || 0) + Number(c.amount || 0));
   }
+  for (const s of splitsRes.data || []) {
+    adjustment.set(s.user_id, (adjustment.get(s.user_id) || 0) - Number(s.amount || 0));
+  }
+  return adjustment;
+}
+
+async function getHouseholdBalanceRows() {
   const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
     p_household_id: state.householdId
   });
   if (error) throw error;
+  const adjustment = await fetchFutureBalanceAdjustment();
 
-  const rows = (data || [])
-    .map((r) => ({
-      userId: r.user_id,
-      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-      net: Number(r.net || 0)
-    }))
+  return (data || [])
+    .map((r) => {
+      const rawNet = Number(r.net || 0) - (adjustment.get(r.user_id) || 0);
+      return {
+        userId: r.user_id,
+        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
+        net: Number(rawNet.toFixed(2))
+      };
+    })
     .sort((a, b) => b.net - a.net);
+}
+
+async function renderBalances(payments) {
+  void payments;
+  const target = document.getElementById("balances-list");
+  if (!target) {
+    const rows = await getHouseholdBalanceRows();
+    const balances = new Map(rows.map((r) => [r.userId, r.net]));
+    const suggestions = buildSettlementSuggestions(rows);
+    return { balances, suggestions };
+  }
+  const rows = await getHouseholdBalanceRows();
 
   const balances = new Map(rows.map((r) => [r.userId, r.net]));
 
@@ -2729,7 +2784,7 @@ async function renderRemindersSection() {
   }
 
   const now = new Date();
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayUtc = localTodayUtc();
   const inSevenDaysUtc = new Date(todayUtc);
   inSevenDaysUtc.setUTCDate(inSevenDaysUtc.getUTCDate() + 7);
   const reminders = [];
@@ -2834,14 +2889,7 @@ async function renderSummaryStats(payments, balanceContext) {
 
   let suggestions = balanceContext?.suggestions || [];
   try {
-    const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-      p_household_id: state.householdId
-    });
-    if (error) throw error;
-    const rows = (data || []).map((r) => ({
-      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-      net: Number(r.net || 0)
-    }));
+    const rows = await getHouseholdBalanceRows();
     const live = buildSettlementSuggestions(rows);
     if (live.length) suggestions = live;
   } catch (error) {
