@@ -282,17 +282,15 @@ function setupModals() {
     if (isRecurring && !state.editingPaymentId) setDefaultRecurringDates();
   };
   recurringToggleInputs.forEach((input) => input.addEventListener("change", syncRecurringFieldsVisibility));
-  const fxRateDateInput = document.querySelector("#payment-form input[name='fx_rate_date']");
   const paymentDateInput = document.querySelector("#payment-form input[name='payment_date']");
   currencySelect?.addEventListener("change", () => {
     toggleFxFields(currencySelect.value);
     if (currencySelect.value.toUpperCase() === "GBP") return;
-    if (fxRateDateInput && !fxRateDateInput.value) {
-      fxRateDateInput.value = paymentDateInput?.value || localTodayIsoDate();
-    }
     autoFillFxRate();
   });
-  fxRateDateInput?.addEventListener("change", () => autoFillFxRate());
+  paymentDateInput?.addEventListener("change", () => {
+    if (currencySelect && currencySelect.value.toUpperCase() !== "GBP") autoFillFxRate();
+  });
   document.getElementById("fx-rate-refresh")?.addEventListener("click", () => autoFillFxRate());
   categorySelect?.addEventListener("change", () => {
     state.categoryManuallySet = true;
@@ -703,7 +701,6 @@ async function maybePropagateRecurringTemplateFromPaymentEdit({ title, amount, c
 function toggleFxFields(currencyCode) {
   const show = String(currencyCode || "").toUpperCase() !== "GBP";
   document.getElementById("fx-rate-to-gbp-row")?.classList.toggle("hidden", !show);
-  document.getElementById("fx-rate-date-row")?.classList.toggle("hidden", !show);
 }
 
 // Free, no-key, CORS-enabled ECB reference rates. Only covers major
@@ -728,7 +725,7 @@ async function autoFillFxRate() {
   const currencyCode = form.currency_code.value;
   if (!currencyCode || currencyCode.toUpperCase() === "GBP") return;
   const status = document.getElementById("fx-rate-status");
-  const dateIso = form.fx_rate_date.value || form.payment_date.value || localTodayIsoDate();
+  const dateIso = form.payment_date.value || localTodayIsoDate();
   if (status) status.textContent = "Fetching rate…";
   try {
     const result = await fetchFxRateToGbp(currencyCode, dateIso);
@@ -2467,7 +2464,7 @@ async function openEditPaymentModal(paymentId) {
   const { data, error } = await state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, title, amount, currency_code, payment_date, fx_rate_to_gbp, fx_rate_date, category_key, notes, source_type, generated_by_recurring_template_id")
+    .select("id, title, amount, currency_code, payment_date, fx_rate_to_gbp, category_key, notes, source_type, generated_by_recurring_template_id")
     .eq("id", paymentId)
     .single();
   if (error) {
@@ -2482,7 +2479,6 @@ async function openEditPaymentModal(paymentId) {
   toggleFxFields(form.currency_code.value);
   form.payment_date.value = data.payment_date || "";
   form.fx_rate_to_gbp.value = data.fx_rate_to_gbp || "";
-  form.fx_rate_date.value = data.fx_rate_date || "";
   const fxStatusForEdit = document.getElementById("fx-rate-status");
   if (fxStatusForEdit) fxStatusForEdit.textContent = "";
   form.category_key.value = data.category_key || "other";
@@ -3189,7 +3185,7 @@ async function savePaymentFromForm(form) {
   const isRecurring = String(formData.get("payment_kind") || "one_off") === "recurring";
   const fxRateRaw = formData.get("fx_rate_to_gbp");
   const fxRateToGbp = currencyCode === "GBP" ? 1 : Number(fxRateRaw || 0);
-  const fxRateDate = String(formData.get("fx_rate_date") || "") || localTodayIsoDate();
+  const fxRateDate = paymentDate || localTodayIsoDate();
 
   if (!title) throw new Error("Expense is required");
   if (!paymentDate) throw new Error("Payment date is required");
