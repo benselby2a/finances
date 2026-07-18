@@ -282,9 +282,18 @@ function setupModals() {
     if (isRecurring && !state.editingPaymentId) setDefaultRecurringDates();
   };
   recurringToggleInputs.forEach((input) => input.addEventListener("change", syncRecurringFieldsVisibility));
+  const fxRateDateInput = document.querySelector("#payment-form input[name='fx_rate_date']");
+  const paymentDateInput = document.querySelector("#payment-form input[name='payment_date']");
   currencySelect?.addEventListener("change", () => {
     toggleFxFields(currencySelect.value);
+    if (currencySelect.value.toUpperCase() === "GBP") return;
+    if (fxRateDateInput && !fxRateDateInput.value) {
+      fxRateDateInput.value = paymentDateInput?.value || localTodayIsoDate();
+    }
+    autoFillFxRate();
   });
+  fxRateDateInput?.addEventListener("change", () => autoFillFxRate());
+  document.getElementById("fx-rate-refresh")?.addEventListener("click", () => autoFillFxRate());
   categorySelect?.addEventListener("change", () => {
     state.categoryManuallySet = true;
   });
@@ -339,6 +348,8 @@ function setupModals() {
       syncRecurringFieldsVisibility();
       document.getElementById("recurring-fields").classList.add("hidden");
       toggleFxFields("GBP");
+      const fxStatusAfterSave = document.getElementById("fx-rate-status");
+      if (fxStatusAfterSave) fxStatusAfterSave.textContent = "";
       state.editingPaymentId = null;
       state.editingPaymentMeta = null;
       state.categoryManuallySet = false;
@@ -362,6 +373,8 @@ function setupModals() {
     syncRecurringFieldsVisibility();
     document.getElementById("recurring-fields")?.classList.add("hidden");
     toggleFxFields("GBP");
+    const fxStatusAfterCancel = document.getElementById("fx-rate-status");
+    if (fxStatusAfterCancel) fxStatusAfterCancel.textContent = "";
     state.editingPaymentId = null;
     state.editingPaymentMeta = null;
     state.categoryManuallySet = false;
@@ -691,6 +704,46 @@ function toggleFxFields(currencyCode) {
   const show = String(currencyCode || "").toUpperCase() !== "GBP";
   document.getElementById("fx-rate-to-gbp-row")?.classList.toggle("hidden", !show);
   document.getElementById("fx-rate-date-row")?.classList.toggle("hidden", !show);
+}
+
+// Free, no-key, CORS-enabled ECB reference rates. Only covers major
+// currencies and doesn't publish on weekends/bank holidays, so callers must
+// treat failures as "fall back to manual entry", not an error.
+async function fetchFxRateToGbp(currencyCode, dateIso) {
+  const code = String(currencyCode || "").toUpperCase();
+  if (!code || code === "GBP") return null;
+  const requestDate = dateIso && dateIso <= localTodayIsoDate() ? dateIso : "latest";
+  const url = `https://api.frankfurter.dev/v1/${requestDate}?base=${encodeURIComponent(code)}&symbols=GBP`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`FX service returned ${response.status}`);
+  const payload = await response.json();
+  const rate = Number(payload?.rates?.GBP);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error(`No GBP rate available for ${code}`);
+  return { rate, asOfDate: payload.date || requestDate };
+}
+
+async function autoFillFxRate() {
+  const form = document.getElementById("payment-form");
+  if (!form) return;
+  const currencyCode = form.currency_code.value;
+  if (!currencyCode || currencyCode.toUpperCase() === "GBP") return;
+  const status = document.getElementById("fx-rate-status");
+  const dateIso = form.fx_rate_date.value || form.payment_date.value || localTodayIsoDate();
+  if (status) status.textContent = "Fetching rate…";
+  try {
+    const result = await fetchFxRateToGbp(currencyCode, dateIso);
+    if (!result) return;
+    form.fx_rate_to_gbp.value = result.rate.toFixed(8);
+    if (status) {
+      status.textContent =
+        result.asOfDate === dateIso
+          ? `Auto-filled from Frankfurter (ECB) for ${toDateLabel(result.asOfDate)}`
+          : `Auto-filled from Frankfurter (ECB), nearest available rate: ${toDateLabel(result.asOfDate)}`;
+    }
+  } catch (error) {
+    if (status) status.textContent = "Auto-fetch failed — enter rate manually.";
+    console.error("FX auto-fetch failed:", error);
+  }
 }
 
 function toIsoDate(date) {
@@ -2430,6 +2483,8 @@ async function openEditPaymentModal(paymentId) {
   form.payment_date.value = data.payment_date || "";
   form.fx_rate_to_gbp.value = data.fx_rate_to_gbp || "";
   form.fx_rate_date.value = data.fx_rate_date || "";
+  const fxStatusForEdit = document.getElementById("fx-rate-status");
+  if (fxStatusForEdit) fxStatusForEdit.textContent = "";
   form.category_key.value = data.category_key || "other";
   state.categoryManuallySet = true;
   if (form.notes) form.notes.value = data.notes || "";
@@ -3134,7 +3189,7 @@ async function savePaymentFromForm(form) {
   const isRecurring = String(formData.get("payment_kind") || "one_off") === "recurring";
   const fxRateRaw = formData.get("fx_rate_to_gbp");
   const fxRateToGbp = currencyCode === "GBP" ? 1 : Number(fxRateRaw || 0);
-  const fxRateDate = String(formData.get("fx_rate_date") || "") || new Date().toISOString().slice(0, 10);
+  const fxRateDate = String(formData.get("fx_rate_date") || "") || localTodayIsoDate();
 
   if (!title) throw new Error("Expense is required");
   if (!paymentDate) throw new Error("Payment date is required");
