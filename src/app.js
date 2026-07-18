@@ -748,14 +748,16 @@ async function autoFillFxRate() {
     const result = await fetchFxRateToGbp(currencyCode, dateIso);
     if (!result) return;
     form.fx_rate_to_gbp.value = result.rate.toFixed(8);
-    if (status) {
-      status.textContent =
-        result.asOfDate === dateIso
-          ? `Auto-filled from Frankfurter (ECB) for ${toDateLabel(result.asOfDate)}`
-          : `Auto-filled from Frankfurter (ECB), nearest available rate: ${toDateLabel(result.asOfDate)}`;
-    }
+    const successMessage =
+      result.asOfDate === dateIso
+        ? `FX rate auto-filled: 1 ${currencyCode} = ${result.rate.toFixed(4)} GBP (${toDateLabel(result.asOfDate)})`
+        : `FX rate auto-filled: 1 ${currencyCode} = ${result.rate.toFixed(4)} GBP (nearest available: ${toDateLabel(result.asOfDate)})`;
+    if (status) status.textContent = successMessage;
+    showToast(successMessage);
   } catch (error) {
-    if (status) status.textContent = `Auto-fetch failed (${formatError(error)}) — enter rate manually.`;
+    const failureMessage = `FX rate auto-fetch failed (${formatError(error)}) — enter rate manually.`;
+    if (status) status.textContent = failureMessage;
+    showToast(failureMessage);
     console.error("FX auto-fetch failed:", error);
   } finally {
     if (refreshBtn) refreshBtn.disabled = false;
