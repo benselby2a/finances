@@ -1415,6 +1415,21 @@ function formatGbp(value) {
   return GBP_FORMAT.format(Number(value || 0));
 }
 
+const CURRENCY_FORMAT_CACHE = new Map();
+function formatCurrencyAmount(value, currencyCode) {
+  const code = String(currencyCode || "GBP").toUpperCase();
+  if (code === "GBP") return formatGbp(value);
+  if (!CURRENCY_FORMAT_CACHE.has(code)) {
+    try {
+      CURRENCY_FORMAT_CACHE.set(code, new Intl.NumberFormat("en-GB", { style: "currency", currency: code }));
+    } catch {
+      CURRENCY_FORMAT_CACHE.set(code, null);
+    }
+  }
+  const formatter = CURRENCY_FORMAT_CACHE.get(code);
+  return formatter ? formatter.format(Number(value || 0)) : `${code} ${Number(value || 0).toFixed(2)}`;
+}
+
 function categoryIcon(categoryKey) {
   const map = {
     household_bills: "🏠",
@@ -2113,7 +2128,7 @@ async function fetchPaymentsPage({ reset = false } = {}) {
   let query = state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at, payment_contributions(user_id,amount), payment_splits(user_id,amount)")
+    .select("id, household_id, title, amount, currency_code, fx_rate_to_gbp, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at, payment_contributions(user_id,amount), payment_splits(user_id,amount)")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
@@ -2165,7 +2180,14 @@ function updateLoadMoreButton() {
 async function buildPaymentMeta(payments) {
   const paymentIds = payments.map((p) => p.id);
   if (!paymentIds.length) return { payerLabels: new Map(), paymentDetails: new Map() };
-  const amountByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount_gbp || 0)]));
+  // payment_contributions/payment_splits rows are recorded in the payment's
+  // ORIGINAL currency (matching how the "Add Payment" form and edit modal
+  // read/write them), not the converted GBP total, so reconciliation and
+  // display must be done against `amount`/`currency_code`, not `amount_gbp`.
+  const amountByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount ?? p.amount_gbp ?? 0)]));
+  const currencyByPaymentId = new Map(payments.map((p) => [p.id, String(p.currency_code || "GBP").toUpperCase()]));
+  const fxRateByPaymentId = new Map(payments.map((p) => [p.id, Number(p.fx_rate_to_gbp || 1)]));
+  const amountGbpByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount_gbp || 0)]));
   const hasEmbeddedMeta = payments.some((p) => Array.isArray(p.payment_contributions) || Array.isArray(p.payment_splits));
 
   const byPayment = new Map();
@@ -2226,6 +2248,8 @@ async function buildPaymentMeta(payments) {
     }
 
     const splitRows = (splitByPayment.get(id) || []).slice().sort((a, b) => Number(b.amount) - Number(a.amount));
+    const currency = currencyByPaymentId.get(id) || "GBP";
+    const fxRate = fxRateByPaymentId.get(id) || 1;
     const expectedAmount = Number((amountByPaymentId.get(id) || 0).toFixed(2));
     const contribTotal = Number(contribRows.reduce((sum, r) => sum + Number(r.amount || 0), 0).toFixed(2));
     const splitTotal = Number(splitRows.reduce((sum, r) => sum + Number(r.amount || 0), 0).toFixed(2));
@@ -2240,15 +2264,22 @@ async function buildPaymentMeta(payments) {
     }
 
     const paidLine = contribRows.length
-      ? `Paid by: ${contribRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`).join(", ")}`
+      ? `Paid by: ${contribRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatCurrencyAmount(r.amount, currency)}`).join(", ")}`
       : "Paid by: Unknown";
     const splitLine = splitRows.length
-      ? `Split: ${splitRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`).join(", ")}`
+      ? `Split: ${splitRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatCurrencyAmount(r.amount, currency)}`).join(", ")}`
       : "Split: Unknown";
+    const fxLine =
+      currency !== "GBP"
+        ? `FX: ${formatCurrencyAmount(expectedAmount, currency)} @ ${fxRate.toFixed(4)} = ${formatGbp(amountGbpByPaymentId.get(id))}`
+        : null;
 
+    // Settlement amounts are always expressed in GBP (the household's home
+    // currency), so convert original-currency contributions/splits before
+    // netting them against each other.
     const netByUser = new Map();
-    for (const r of contribRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) + Number(r.amount || 0));
-    for (const r of splitRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) - Number(r.amount || 0));
+    for (const r of contribRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) + Number(r.amount || 0) * fxRate);
+    for (const r of splitRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) - Number(r.amount || 0) * fxRate);
     const creditors = [];
     const debtors = [];
     for (const [userId, net] of netByUser.entries()) {
@@ -2271,7 +2302,7 @@ async function buildPaymentMeta(payments) {
       if (creditors[j].amount <= 0.009) j += 1;
     }
     const resultLine = results.length ? `Result: ${results.join(" | ")}` : "Result: No one owes anything";
-    paymentDetails.set(id, { paidLine, splitLine, resultLine });
+    paymentDetails.set(id, { paidLine, splitLine, resultLine, fxLine });
   }
   return { payerLabels: labels, paymentDetails };
 }
@@ -2293,6 +2324,7 @@ function renderPaymentRow(p, payerLabels, paymentDetails) {
       ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
+      ${!isSettlement && detail?.fxLine ? `<div class="payment-meta-line">${escapeHtml(detail.fxLine)}</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}`;
   const hasSubtitleDetails = subtitleHtml.replace(/\s/g, "").length > 0;
   const rowClassWithDetails = `${rowClass}${hasSubtitleDetails ? "" : " no-mobile-details"}`;
@@ -2468,39 +2500,54 @@ function applyOptimisticPaymentMutation(mutation) {
   renderPayments(state.loadedPayments || [], new Map(), new Map(), state.lastHypotheticalRows || []);
 }
 
-// Payments dated after "today" are shown as projected and must not affect
-// balances yet. The balances RPC has no notion of "future" (it aggregates
-// all non-deleted payments), so rather than changing the DB function we
-// pull the contribution/split rows for just the future-dated payments here
-// and net them back out of the RPC's totals client-side.
-async function fetchFutureBalanceAdjustment() {
-  const adjustment = new Map();
-  const { data: futurePayments, error } = await state.supabase
+// The balances RPC sums payment_contributions.amount / payment_splits.amount
+// directly and treats the result as GBP. Two cases make that wrong, and
+// rather than changing the DB function we correct for both client-side:
+//  1. Future-dated payments (shown as "projected") should not count at all
+//     yet — their raw contribution/split amounts need removing entirely.
+//  2. Non-GBP payments store contributions/splits in the ORIGINAL currency
+//     (matching how the Add Payment form and edit modal read/write them),
+//     not the converted GBP amount, so the RPC's raw sum overstates/understates
+//     them by a factor of fx_rate_to_gbp.
+// For a payment needing correction, "true" GBP value of a contribution/split
+// row is `raw * fx_rate_to_gbp` (or 0 entirely if it's future-dated); the
+// delta between that and the RPC's raw sum is netted out per user below.
+async function fetchBalanceCorrections() {
+  const correction = new Map();
+  const todayIso = localTodayIsoDate();
+  const { data: candidatePayments, error } = await state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id")
+    .select("id, fx_rate_to_gbp, payment_date")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
-    .gt("payment_date", localTodayIsoDate());
+    .or(`payment_date.gt.${todayIso},fx_rate_to_gbp.neq.1`);
   if (error) throw error;
 
-  const futureIds = (futurePayments || []).map((p) => p.id);
-  if (!futureIds.length) return adjustment;
+  const candidateIds = (candidatePayments || []).map((p) => p.id);
+  if (!candidateIds.length) return correction;
+
+  const fxRateByPayment = new Map(candidatePayments.map((p) => [p.id, Number(p.fx_rate_to_gbp || 1)]));
+  const isFutureByPayment = new Map(candidatePayments.map((p) => [p.id, isFutureDated(p.payment_date)]));
 
   const [contribRes, splitsRes] = await Promise.all([
-    state.supabase.schema("finance_app").from("payment_contributions").select("user_id, amount").in("payment_id", futureIds),
-    state.supabase.schema("finance_app").from("payment_splits").select("user_id, amount").in("payment_id", futureIds)
+    state.supabase.schema("finance_app").from("payment_contributions").select("payment_id, user_id, amount").in("payment_id", candidateIds),
+    state.supabase.schema("finance_app").from("payment_splits").select("payment_id, user_id, amount").in("payment_id", candidateIds)
   ]);
   if (contribRes.error) throw contribRes.error;
   if (splitsRes.error) throw splitsRes.error;
 
-  for (const c of contribRes.data || []) {
-    adjustment.set(c.user_id, (adjustment.get(c.user_id) || 0) + Number(c.amount || 0));
-  }
-  for (const s of splitsRes.data || []) {
-    adjustment.set(s.user_id, (adjustment.get(s.user_id) || 0) - Number(s.amount || 0));
-  }
-  return adjustment;
+  const netCorrection = (rows, sign) => {
+    for (const row of rows || []) {
+      const raw = Number(row.amount || 0);
+      const trueGbp = isFutureByPayment.get(row.payment_id) ? 0 : raw * fxRateByPayment.get(row.payment_id);
+      const delta = raw - trueGbp;
+      correction.set(row.user_id, (correction.get(row.user_id) || 0) + sign * delta);
+    }
+  };
+  netCorrection(contribRes.data, 1);
+  netCorrection(splitsRes.data, -1);
+  return correction;
 }
 
 async function getHouseholdBalanceRows() {
@@ -2508,7 +2555,7 @@ async function getHouseholdBalanceRows() {
     p_household_id: state.householdId
   });
   if (error) throw error;
-  const adjustment = await fetchFutureBalanceAdjustment();
+  const adjustment = await fetchBalanceCorrections();
 
   return (data || [])
     .map((r) => {
@@ -3149,6 +3196,9 @@ async function savePaymentFromForm(form) {
       id: paymentId,
       household_id: state.householdId,
       title,
+      amount,
+      currency_code: currencyCode,
+      fx_rate_to_gbp: fxRateToGbp,
       amount_gbp: amountGbp,
       payment_date: paymentDate,
       category_key: categoryKey,
@@ -3202,6 +3252,9 @@ async function savePaymentFromForm(form) {
       id: payment.id,
       household_id: state.householdId,
       title,
+      amount,
+      currency_code: currencyCode,
+      fx_rate_to_gbp: fxRateToGbp,
       amount_gbp: amountGbp,
       payment_date: paymentDate,
       category_key: categoryKey,
