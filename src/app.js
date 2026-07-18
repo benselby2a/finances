@@ -706,27 +706,44 @@ function toggleFxFields(currencyCode) {
 // Free, no-key, CORS-enabled ECB reference rates. Only covers major
 // currencies and doesn't publish on weekends/bank holidays, so callers must
 // treat failures as "fall back to manual entry", not an error.
-async function fetchFxRateToGbp(currencyCode, dateIso) {
-  const code = String(currencyCode || "").toUpperCase();
-  if (!code || code === "GBP") return null;
-  const requestDate = dateIso && dateIso <= localTodayIsoDate() ? dateIso : "latest";
-  const url = `https://api.frankfurter.dev/v1/${requestDate}?base=${encodeURIComponent(code)}&symbols=GBP`;
+async function requestFxRateToGbp(currencyCode, requestDate) {
+  const url = `https://api.frankfurter.dev/v1/${requestDate}?base=${encodeURIComponent(currencyCode)}&symbols=GBP`;
   const response = await fetch(url);
   if (!response.ok) throw new Error(`FX service returned ${response.status}`);
   const payload = await response.json();
   const rate = Number(payload?.rates?.GBP);
-  if (!Number.isFinite(rate) || rate <= 0) throw new Error(`No GBP rate available for ${code}`);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error(`No GBP rate in FX service response for ${currencyCode}`);
   return { rate, asOfDate: payload.date || requestDate };
+}
+
+async function fetchFxRateToGbp(currencyCode, dateIso) {
+  const code = String(currencyCode || "").toUpperCase();
+  if (!code || code === "GBP") return null;
+  const requestDate = dateIso && dateIso <= localTodayIsoDate() ? dateIso : "latest";
+  try {
+    return await requestFxRateToGbp(code, requestDate);
+  } catch (error) {
+    // The exact date can 404 (weekends/bank holidays aren't published) even
+    // though the currency itself is supported — retry once against the
+    // latest available rate before giving up.
+    if (requestDate === "latest") throw error;
+    return await requestFxRateToGbp(code, "latest");
+  }
 }
 
 async function autoFillFxRate() {
   const form = document.getElementById("payment-form");
   if (!form) return;
   const currencyCode = form.currency_code.value;
-  if (!currencyCode || currencyCode.toUpperCase() === "GBP") return;
   const status = document.getElementById("fx-rate-status");
+  const refreshBtn = document.getElementById("fx-rate-refresh");
+  if (!currencyCode || currencyCode.toUpperCase() === "GBP") {
+    if (status) status.textContent = "";
+    return;
+  }
   const dateIso = form.payment_date.value || localTodayIsoDate();
   if (status) status.textContent = "Fetching rate…";
+  if (refreshBtn) refreshBtn.disabled = true;
   try {
     const result = await fetchFxRateToGbp(currencyCode, dateIso);
     if (!result) return;
@@ -738,8 +755,10 @@ async function autoFillFxRate() {
           : `Auto-filled from Frankfurter (ECB), nearest available rate: ${toDateLabel(result.asOfDate)}`;
     }
   } catch (error) {
-    if (status) status.textContent = "Auto-fetch failed — enter rate manually.";
+    if (status) status.textContent = `Auto-fetch failed (${formatError(error)}) — enter rate manually.`;
     console.error("FX auto-fetch failed:", error);
+  } finally {
+    if (refreshBtn) refreshBtn.disabled = false;
   }
 }
 
