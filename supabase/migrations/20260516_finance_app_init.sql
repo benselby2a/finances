@@ -48,6 +48,7 @@ insert into finance_app.categories (key, label, icon_key, sort_order) values
   ('entertainment', 'Entertainment', 'film', 120),
   ('dining', 'Dining', 'utensils', 130),
   ('shopping', 'Shopping', 'bag', 140),
+  ('settlements', 'Settlements', 'repeat', 85),
   ('other', 'Other', 'circle', 999)
 on conflict (key) do nothing;
 
