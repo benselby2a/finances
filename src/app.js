@@ -282,16 +282,9 @@ function setupModals() {
     if (isRecurring && !state.editingPaymentId) setDefaultRecurringDates();
   };
   recurringToggleInputs.forEach((input) => input.addEventListener("change", syncRecurringFieldsVisibility));
-  const paymentDateInput = document.querySelector("#payment-form input[name='payment_date']");
   currencySelect?.addEventListener("change", () => {
     toggleFxFields(currencySelect.value);
-    if (currencySelect.value.toUpperCase() === "GBP") return;
-    autoFillFxRate();
   });
-  paymentDateInput?.addEventListener("change", () => {
-    if (currencySelect && currencySelect.value.toUpperCase() !== "GBP") autoFillFxRate();
-  });
-  document.getElementById("fx-rate-refresh")?.addEventListener("click", () => autoFillFxRate());
   categorySelect?.addEventListener("change", () => {
     state.categoryManuallySet = true;
   });
@@ -314,7 +307,7 @@ function setupModals() {
     btn.addEventListener("click", () => {
       const form = document.getElementById("payment-form");
       if (!form) return;
-      const today = localTodayUtc();
+      const today = new Date();
       const mode = btn.getAttribute("data-quick-date");
       if (mode === "today") form.payment_date.value = toIsoDate(today);
       if (mode === "yesterday") {
@@ -346,8 +339,6 @@ function setupModals() {
       syncRecurringFieldsVisibility();
       document.getElementById("recurring-fields").classList.add("hidden");
       toggleFxFields("GBP");
-      const fxStatusAfterSave = document.getElementById("fx-rate-status");
-      if (fxStatusAfterSave) fxStatusAfterSave.textContent = "";
       state.editingPaymentId = null;
       state.editingPaymentMeta = null;
       state.categoryManuallySet = false;
@@ -371,8 +362,6 @@ function setupModals() {
     syncRecurringFieldsVisibility();
     document.getElementById("recurring-fields")?.classList.add("hidden");
     toggleFxFields("GBP");
-    const fxStatusAfterCancel = document.getElementById("fx-rate-status");
-    if (fxStatusAfterCancel) fxStatusAfterCancel.textContent = "";
     state.editingPaymentId = null;
     state.editingPaymentMeta = null;
     state.categoryManuallySet = false;
@@ -474,7 +463,7 @@ function computeNextDueDateForTemplate(template, now = new Date()) {
   const start = new Date(`${template.start_date}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) return null;
   const end = template.end_date ? new Date(`${template.end_date}T00:00:00Z`) : null;
-  const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   if (end && end < todayUtc) return null;
 
   if (template.frequency === "annual") {
@@ -701,95 +690,18 @@ async function maybePropagateRecurringTemplateFromPaymentEdit({ title, amount, c
 function toggleFxFields(currencyCode) {
   const show = String(currencyCode || "").toUpperCase() !== "GBP";
   document.getElementById("fx-rate-to-gbp-row")?.classList.toggle("hidden", !show);
-}
-
-// Free, no-key, CORS-enabled ECB reference rates. Only covers major
-// currencies and doesn't publish on weekends/bank holidays, so callers must
-// treat failures as "fall back to manual entry", not an error.
-async function requestFxRateToGbp(currencyCode, requestDate) {
-  const url = `https://api.frankfurter.dev/v1/${requestDate}?base=${encodeURIComponent(currencyCode)}&symbols=GBP`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`FX service returned ${response.status}`);
-  const payload = await response.json();
-  const rate = Number(payload?.rates?.GBP);
-  if (!Number.isFinite(rate) || rate <= 0) throw new Error(`No GBP rate in FX service response for ${currencyCode}`);
-  return { rate, asOfDate: payload.date || requestDate };
-}
-
-async function fetchFxRateToGbp(currencyCode, dateIso) {
-  const code = String(currencyCode || "").toUpperCase();
-  if (!code || code === "GBP") return null;
-  const requestDate = dateIso && dateIso <= localTodayIsoDate() ? dateIso : "latest";
-  try {
-    return await requestFxRateToGbp(code, requestDate);
-  } catch (error) {
-    // The exact date can 404 (weekends/bank holidays aren't published) even
-    // though the currency itself is supported — retry once against the
-    // latest available rate before giving up.
-    if (requestDate === "latest") throw error;
-    return await requestFxRateToGbp(code, "latest");
-  }
-}
-
-async function autoFillFxRate() {
-  const form = document.getElementById("payment-form");
-  if (!form) return;
-  const currencyCode = form.currency_code.value;
-  const status = document.getElementById("fx-rate-status");
-  const refreshBtn = document.getElementById("fx-rate-refresh");
-  if (!currencyCode || currencyCode.toUpperCase() === "GBP") {
-    if (status) status.textContent = "";
-    return;
-  }
-  const dateIso = form.payment_date.value || localTodayIsoDate();
-  if (status) status.textContent = "Fetching rate…";
-  if (refreshBtn) refreshBtn.disabled = true;
-  try {
-    const result = await fetchFxRateToGbp(currencyCode, dateIso);
-    if (!result) return;
-    form.fx_rate_to_gbp.value = result.rate.toFixed(8);
-    const successMessage =
-      result.asOfDate === dateIso
-        ? `FX rate auto-filled: 1 ${currencyCode} = ${result.rate.toFixed(4)} GBP (${toDateLabel(result.asOfDate)})`
-        : `FX rate auto-filled: 1 ${currencyCode} = ${result.rate.toFixed(4)} GBP (nearest available: ${toDateLabel(result.asOfDate)})`;
-    if (status) status.textContent = successMessage;
-    showToast(successMessage);
-  } catch (error) {
-    const failureMessage = `FX rate auto-fetch failed (${formatError(error)}) — enter rate manually.`;
-    if (status) status.textContent = failureMessage;
-    showToast(failureMessage);
-    console.error("FX auto-fetch failed:", error);
-  } finally {
-    if (refreshBtn) refreshBtn.disabled = false;
-  }
+  document.getElementById("fx-rate-date-row")?.classList.toggle("hidden", !show);
 }
 
 function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-// A UTC-midnight instant carrying the browser's LOCAL calendar date. Using
-// this (instead of `new Date()`'s raw UTC getters) keeps "today" aligned with
-// the user's actual day even when local time is ahead of UTC (e.g. BST),
-// which otherwise makes due/generated dates land a day late.
-function localTodayUtc() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-}
-
-function localTodayIsoDate() {
-  return toIsoDate(localTodayUtc());
-}
-
-function isFutureDated(dateStr) {
-  return Boolean(dateStr) && String(dateStr) > localTodayIsoDate();
-}
-
 function setDefaultPaymentDateIfEmpty() {
   const form = document.getElementById("payment-form");
   if (!form) return;
   if (!form.payment_date.value) {
-    form.payment_date.value = localTodayIsoDate();
+    form.payment_date.value = toIsoDate(new Date());
   }
 }
 
@@ -803,7 +715,7 @@ function syncRecurringTemplateCategoryOptions() {
 function setDefaultRecurringDates() {
   const form = document.getElementById("payment-form");
   if (!form) return;
-  const today = localTodayUtc();
+  const today = new Date();
   const oneYearLater = new Date(today);
   oneYearLater.setUTCFullYear(oneYearLater.getUTCFullYear() + 1);
 
@@ -843,12 +755,16 @@ function updateSettlementSaveState() {
 }
 
 async function getTopSettlementSuggestion() {
-  const rows = await getHouseholdBalanceRows();
+  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
+    p_household_id: state.householdId
+  });
+  if (error) throw error;
   const creditors = [];
   const debtors = [];
-  for (const r of rows) {
-    if (r.net > 0.009) creditors.push({ userId: r.userId, amount: Number(r.net.toFixed(2)) });
-    if (r.net < -0.009) debtors.push({ userId: r.userId, amount: Number(Math.abs(r.net).toFixed(2)) });
+  for (const r of data || []) {
+    const net = Number(r.net || 0);
+    if (net > 0.009) creditors.push({ userId: r.user_id, amount: Number(net.toFixed(2)) });
+    if (net < -0.009) debtors.push({ userId: r.user_id, amount: Number(Math.abs(net).toFixed(2)) });
   }
   creditors.sort((a, b) => b.amount - a.amount);
   debtors.sort((a, b) => b.amount - a.amount);
@@ -872,7 +788,7 @@ async function openSettlementModal(prefill = null) {
   const form = document.getElementById("settlement-form");
   if (!modal || !form) return;
   populateSettlementPartyOptions();
-  form.payment_date.value = localTodayIsoDate();
+  form.payment_date.value = toIsoDate(new Date());
   form.amount.value = "";
   if (form.notes) form.notes.value = "";
   const hint = document.getElementById("settlement-outstanding-hint");
@@ -1162,7 +1078,8 @@ async function processRecurringPayments() {
     splitsByTemplate.get(row.recurring_template_id).push(row);
   }
 
-  const today = localTodayUtc();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
   for (const t of templates) {
     const dueDates = computeDueDates(t, today).slice(0, RECURRING_MAX_BACKFILL_PER_TEMPLATE);
@@ -1315,7 +1232,7 @@ async function renderHypotheticalUpcoming() {
     .limit(500);
   if (error) throw error;
 
-  const today = localTodayUtc();
+  const today = new Date();
   const horizon = new Date(today);
   horizon.setUTCDate(horizon.getUTCDate() + 30);
 
@@ -1486,21 +1403,6 @@ function formatGbp(value) {
   return GBP_FORMAT.format(Number(value || 0));
 }
 
-const CURRENCY_FORMAT_CACHE = new Map();
-function formatCurrencyAmount(value, currencyCode) {
-  const code = String(currencyCode || "GBP").toUpperCase();
-  if (code === "GBP") return formatGbp(value);
-  if (!CURRENCY_FORMAT_CACHE.has(code)) {
-    try {
-      CURRENCY_FORMAT_CACHE.set(code, new Intl.NumberFormat("en-GB", { style: "currency", currency: code }));
-    } catch {
-      CURRENCY_FORMAT_CACHE.set(code, null);
-    }
-  }
-  const formatter = CURRENCY_FORMAT_CACHE.get(code);
-  return formatter ? formatter.format(Number(value || 0)) : `${code} ${Number(value || 0).toFixed(2)}`;
-}
-
 function categoryIcon(categoryKey) {
   const map = {
     household_bills: "🏠",
@@ -1544,7 +1446,9 @@ function escapeHtml(value) {
   return String(value || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function toDateLabel(dateValue) {
@@ -1700,7 +1604,7 @@ function renderPaidByRows(prefill = null, options = {}) {
     target.innerHTML = state.members
       .map((m) => {
         const checked = m.user_id === selectedUserId ? "checked" : "";
-        return `<label class="inline">
+        return `<label class="inline" style="margin-bottom:4px">
           <input type="radio" name="paid_by_user" data-paid-by-user="${m.user_id}" ${checked} />
           ${escapeHtml(memberNameByUserId(m.user_id))}
         </label>`;
@@ -1819,32 +1723,12 @@ function renderSplitRows(prefill = null) {
     })
     .join("");
   target.querySelectorAll("[data-split-user], [data-split-value]").forEach((el) => {
-    el.addEventListener("input", (e) => {
-      if (e.target.hasAttribute("data-split-value") && state.members.length === 2 &&
-          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "fixed")) {
-        const changedUserId = e.target.getAttribute("data-split-value");
-        const otherInput = target.querySelector(`[data-split-value]:not([data-split-value="${changedUserId}"])`);
-        if (otherInput) {
-          const val = Number(e.target.value || 0);
-          const total = state.advancedOwesMode === "percentage" ? 100 : Number(document.querySelector("#payment-form input[name='amount']")?.value || 0);
-          otherInput.value = Math.max(0, Number((total - val).toFixed(2)));
-        }
-      }
+    el.addEventListener("input", () => {
       updateSplitValidationBanner(false);
       if (state.debouncedNetEffectUpdate) state.debouncedNetEffectUpdate();
       else updatePaymentNetEffectPreview();
     });
-    el.addEventListener("change", (e) => {
-      if (e.target.hasAttribute("data-split-value") && state.members.length === 2 &&
-          (state.advancedOwesMode === "percentage" || state.advancedOwesMode === "fixed")) {
-        const changedUserId = e.target.getAttribute("data-split-value");
-        const otherInput = target.querySelector(`[data-split-value]:not([data-split-value="${changedUserId}"])`);
-        if (otherInput) {
-          const val = Number(e.target.value || 0);
-          const total = state.advancedOwesMode === "percentage" ? 100 : Number(document.querySelector("#payment-form input[name='amount']")?.value || 0);
-          otherInput.value = Math.max(0, Number((total - val).toFixed(2)));
-        }
-      }
+    el.addEventListener("change", () => {
       updateSplitValidationBanner(false);
       updatePaymentNetEffectPreview();
     });
@@ -2199,7 +2083,7 @@ async function fetchPaymentsPage({ reset = false } = {}) {
   let query = state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, household_id, title, amount, currency_code, fx_rate_to_gbp, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at, payment_contributions(user_id,amount), payment_splits(user_id,amount)")
+    .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at, payment_contributions(user_id,amount), payment_splits(user_id,amount)")
     .eq("household_id", state.householdId)
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
@@ -2251,14 +2135,7 @@ function updateLoadMoreButton() {
 async function buildPaymentMeta(payments) {
   const paymentIds = payments.map((p) => p.id);
   if (!paymentIds.length) return { payerLabels: new Map(), paymentDetails: new Map() };
-  // payment_contributions/payment_splits rows are recorded in the payment's
-  // ORIGINAL currency (matching how the "Add Payment" form and edit modal
-  // read/write them), not the converted GBP total, so reconciliation and
-  // display must be done against `amount`/`currency_code`, not `amount_gbp`.
-  const amountByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount ?? p.amount_gbp ?? 0)]));
-  const currencyByPaymentId = new Map(payments.map((p) => [p.id, String(p.currency_code || "GBP").toUpperCase()]));
-  const fxRateByPaymentId = new Map(payments.map((p) => [p.id, Number(p.fx_rate_to_gbp || 1)]));
-  const amountGbpByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount_gbp || 0)]));
+  const amountByPaymentId = new Map(payments.map((p) => [p.id, Number(p.amount_gbp || 0)]));
   const hasEmbeddedMeta = payments.some((p) => Array.isArray(p.payment_contributions) || Array.isArray(p.payment_splits));
 
   const byPayment = new Map();
@@ -2319,8 +2196,6 @@ async function buildPaymentMeta(payments) {
     }
 
     const splitRows = (splitByPayment.get(id) || []).slice().sort((a, b) => Number(b.amount) - Number(a.amount));
-    const currency = currencyByPaymentId.get(id) || "GBP";
-    const fxRate = fxRateByPaymentId.get(id) || 1;
     const expectedAmount = Number((amountByPaymentId.get(id) || 0).toFixed(2));
     const contribTotal = Number(contribRows.reduce((sum, r) => sum + Number(r.amount || 0), 0).toFixed(2));
     const splitTotal = Number(splitRows.reduce((sum, r) => sum + Number(r.amount || 0), 0).toFixed(2));
@@ -2335,22 +2210,15 @@ async function buildPaymentMeta(payments) {
     }
 
     const paidLine = contribRows.length
-      ? `Paid by: ${contribRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatCurrencyAmount(r.amount, currency)}`).join(", ")}`
+      ? `Paid by: ${contribRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`).join(", ")}`
       : "Paid by: Unknown";
     const splitLine = splitRows.length
-      ? `Split: ${splitRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatCurrencyAmount(r.amount, currency)}`).join(", ")}`
+      ? `Split: ${splitRows.map((r) => `${memberNameByUserId(r.user_id)} ${formatGbp(r.amount)}`).join(", ")}`
       : "Split: Unknown";
-    const fxLine =
-      currency !== "GBP"
-        ? `FX: ${formatCurrencyAmount(expectedAmount, currency)} @ ${fxRate.toFixed(4)} = ${formatGbp(amountGbpByPaymentId.get(id))}`
-        : null;
 
-    // Settlement amounts are always expressed in GBP (the household's home
-    // currency), so convert original-currency contributions/splits before
-    // netting them against each other.
     const netByUser = new Map();
-    for (const r of contribRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) + Number(r.amount || 0) * fxRate);
-    for (const r of splitRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) - Number(r.amount || 0) * fxRate);
+    for (const r of contribRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) + Number(r.amount || 0));
+    for (const r of splitRows) netByUser.set(r.user_id, (netByUser.get(r.user_id) || 0) - Number(r.amount || 0));
     const creditors = [];
     const debtors = [];
     for (const [userId, net] of netByUser.entries()) {
@@ -2373,15 +2241,13 @@ async function buildPaymentMeta(payments) {
       if (creditors[j].amount <= 0.009) j += 1;
     }
     const resultLine = results.length ? `Result: ${results.join(" | ")}` : "Result: No one owes anything";
-    paymentDetails.set(id, { paidLine, splitLine, resultLine, fxLine });
+    paymentDetails.set(id, { paidLine, splitLine, resultLine });
   }
   return { payerLabels: labels, paymentDetails };
 }
 
 function renderPaymentRow(p, payerLabels, paymentDetails) {
   const isSettlement = p.source_type === "settlement";
-  const isFutureReal = !p.is_hypothetical && !isSettlement && isFutureDated(p.payment_date);
-  const isProjected = p.is_hypothetical || isFutureReal;
   const payer = p.is_hypothetical
     ? (p.hypothetical_payer_name || memberNameByUserId(p.created_by) || "—")
     : (payerLabels?.get(p.id) || memberNameByUserId(p.created_by));
@@ -2389,13 +2255,11 @@ function renderPaymentRow(p, payerLabels, paymentDetails) {
   const isRecurringInitial = p.source_type === "one_off" && Boolean(p.generated_by_recurring_template_id);
   const typeLabel = isRecurringInitial ? "recurring_initial" : p.source_type;
   const categoryLabel = isRecurringInitial ? "recurring" : (p.category_key || "-");
-  const rowClass = isProjected ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
+  const rowClass = p.is_hypothetical ? "hypothetical-payment-row" : (p.source_type === "settlement" ? "cash-row" : "");
   const subtitleHtml = `${!isSettlement && p.is_hypothetical ? `<div class="payment-meta-line">Projected from recurring payment</div>` : ""}
-      ${!isSettlement && isFutureReal ? `<div class="payment-meta-line">Projected (future dated, excluded from totals)</div>` : ""}
       ${!isSettlement && !p.is_hypothetical && !detail ? `<div class="payment-meta-line">(imported from splitwise)</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.paidLine)}</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-meta-line">${escapeHtml(detail.splitLine)}</div>` : ""}
-      ${!isSettlement && detail?.fxLine ? `<div class="payment-meta-line">${escapeHtml(detail.fxLine)}</div>` : ""}
       ${!isSettlement && detail ? `<div class="payment-result-line">${escapeHtml(detail.resultLine)}</div>` : ""}`;
   const hasSubtitleDetails = subtitleHtml.replace(/\s/g, "").length > 0;
   const rowClassWithDetails = `${rowClass}${hasSubtitleDetails ? "" : " no-mobile-details"}`;
@@ -2429,23 +2293,16 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypot
   const target = document.getElementById("payments-list");
   const showProjected = document.getElementById("show-projected")?.checked ?? true;
   const toggleLabel = document.getElementById("show-projected-toggle");
-  const hasFutureRealPayments = (payments || []).some(
-    (p) => p.source_type !== "settlement" && isFutureDated(p.payment_date)
-  );
 
-  if (hypotheticalRows.length || hasFutureRealPayments) {
+  if (hypotheticalRows.length) {
     toggleLabel?.classList.remove("hidden");
   } else {
     toggleLabel?.classList.add("hidden");
   }
 
-  const visiblePayments = showProjected
-    ? (payments || [])
-    : (payments || []).filter((p) => p.source_type === "settlement" || !isFutureDated(p.payment_date));
-
   const combined = [
     ...(showProjected ? (hypotheticalRows || []).slice(0, 100) : []),
-    ...visiblePayments.slice(0, 200)
+    ...(payments || []).slice(0, 200)
   ];
 
   if (!combined.length) {
@@ -2485,7 +2342,7 @@ async function openEditPaymentModal(paymentId) {
   const { data, error } = await state.supabase
     .schema("finance_app")
     .from("payments")
-    .select("id, title, amount, currency_code, payment_date, fx_rate_to_gbp, category_key, notes, source_type, generated_by_recurring_template_id")
+    .select("id, title, amount, currency_code, payment_date, fx_rate_to_gbp, fx_rate_date, category_key, notes, source_type, generated_by_recurring_template_id")
     .eq("id", paymentId)
     .single();
   if (error) {
@@ -2500,8 +2357,7 @@ async function openEditPaymentModal(paymentId) {
   toggleFxFields(form.currency_code.value);
   form.payment_date.value = data.payment_date || "";
   form.fx_rate_to_gbp.value = data.fx_rate_to_gbp || "";
-  const fxStatusForEdit = document.getElementById("fx-rate-status");
-  if (fxStatusForEdit) fxStatusForEdit.textContent = "";
+  form.fx_rate_date.value = data.fx_rate_date || "";
   form.category_key.value = data.category_key || "other";
   state.categoryManuallySet = true;
   if (form.notes) form.notes.value = data.notes || "";
@@ -2572,85 +2428,37 @@ function applyOptimisticPaymentMutation(mutation) {
   renderPayments(state.loadedPayments || [], new Map(), new Map(), state.lastHypotheticalRows || []);
 }
 
-// The balances RPC sums payment_contributions.amount / payment_splits.amount
-// directly and treats the result as GBP. Two cases make that wrong, and
-// rather than changing the DB function we correct for both client-side:
-//  1. Future-dated payments (shown as "projected") should not count at all
-//     yet — their raw contribution/split amounts need removing entirely.
-//  2. Non-GBP payments store contributions/splits in the ORIGINAL currency
-//     (matching how the Add Payment form and edit modal read/write them),
-//     not the converted GBP amount, so the RPC's raw sum overstates/understates
-//     them by a factor of fx_rate_to_gbp.
-// For a payment needing correction, "true" GBP value of a contribution/split
-// row is `raw * fx_rate_to_gbp` (or 0 entirely if it's future-dated); the
-// delta between that and the RPC's raw sum is netted out per user below.
-async function fetchBalanceCorrections() {
-  const correction = new Map();
-  const todayIso = localTodayIsoDate();
-  const { data: candidatePayments, error } = await state.supabase
-    .schema("finance_app")
-    .from("payments")
-    .select("id, fx_rate_to_gbp, payment_date")
-    .eq("household_id", state.householdId)
-    .is("deleted_at", null)
-    .or(`payment_date.gt.${todayIso},fx_rate_to_gbp.neq.1`);
-  if (error) throw error;
-
-  const candidateIds = (candidatePayments || []).map((p) => p.id);
-  if (!candidateIds.length) return correction;
-
-  const fxRateByPayment = new Map(candidatePayments.map((p) => [p.id, Number(p.fx_rate_to_gbp || 1)]));
-  const isFutureByPayment = new Map(candidatePayments.map((p) => [p.id, isFutureDated(p.payment_date)]));
-
-  const [contribRes, splitsRes] = await Promise.all([
-    state.supabase.schema("finance_app").from("payment_contributions").select("payment_id, user_id, amount").in("payment_id", candidateIds),
-    state.supabase.schema("finance_app").from("payment_splits").select("payment_id, user_id, amount").in("payment_id", candidateIds)
-  ]);
-  if (contribRes.error) throw contribRes.error;
-  if (splitsRes.error) throw splitsRes.error;
-
-  const netCorrection = (rows, sign) => {
-    for (const row of rows || []) {
-      const raw = Number(row.amount || 0);
-      const trueGbp = isFutureByPayment.get(row.payment_id) ? 0 : raw * fxRateByPayment.get(row.payment_id);
-      const delta = raw - trueGbp;
-      correction.set(row.user_id, (correction.get(row.user_id) || 0) + sign * delta);
-    }
-  };
-  netCorrection(contribRes.data, 1);
-  netCorrection(splitsRes.data, -1);
-  return correction;
-}
-
-async function getHouseholdBalanceRows() {
-  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
-    p_household_id: state.householdId
-  });
-  if (error) throw error;
-  const adjustment = await fetchBalanceCorrections();
-
-  return (data || [])
-    .map((r) => {
-      const rawNet = Number(r.net || 0) - (adjustment.get(r.user_id) || 0);
-      return {
-        userId: r.user_id,
-        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
-        net: Number(rawNet.toFixed(2))
-      };
-    })
-    .sort((a, b) => b.net - a.net);
-}
-
 async function renderBalances(payments) {
   void payments;
   const target = document.getElementById("balances-list");
   if (!target) {
-    const rows = await getHouseholdBalanceRows();
+    const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
+      p_household_id: state.householdId
+    });
+    if (error) throw error;
+    const rows = (data || [])
+      .map((r) => ({
+        userId: r.user_id,
+        name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
+        net: Number(r.net || 0)
+      }))
+      .sort((a, b) => b.net - a.net);
     const balances = new Map(rows.map((r) => [r.userId, r.net]));
     const suggestions = buildSettlementSuggestions(rows);
     return { balances, suggestions };
   }
-  const rows = await getHouseholdBalanceRows();
+  const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
+    p_household_id: state.householdId
+  });
+  if (error) throw error;
+
+  const rows = (data || [])
+    .map((r) => ({
+      userId: r.user_id,
+      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
+      net: Number(r.net || 0)
+    }))
+    .sort((a, b) => b.net - a.net);
 
   const balances = new Map(rows.map((r) => [r.userId, r.net]));
 
@@ -2903,7 +2711,7 @@ async function renderRemindersSection() {
   }
 
   const now = new Date();
-  const todayUtc = localTodayUtc();
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const inSevenDaysUtc = new Date(todayUtc);
   inSevenDaysUtc.setUTCDate(inSevenDaysUtc.getUTCDate() + 7);
   const reminders = [];
@@ -3008,7 +2816,14 @@ async function renderSummaryStats(payments, balanceContext) {
 
   let suggestions = balanceContext?.suggestions || [];
   try {
-    const rows = await getHouseholdBalanceRows();
+    const { data, error } = await state.supabase.schema("finance_app").rpc("get_household_balances", {
+      p_household_id: state.householdId
+    });
+    if (error) throw error;
+    const rows = (data || []).map((r) => ({
+      name: toDisplayFirstName(r.display_name) || memberNameByUserId(r.user_id),
+      net: Number(r.net || 0)
+    }));
     const live = buildSettlementSuggestions(rows);
     if (live.length) suggestions = live;
   } catch (error) {
@@ -3206,7 +3021,7 @@ async function savePaymentFromForm(form) {
   const isRecurring = String(formData.get("payment_kind") || "one_off") === "recurring";
   const fxRateRaw = formData.get("fx_rate_to_gbp");
   const fxRateToGbp = currencyCode === "GBP" ? 1 : Number(fxRateRaw || 0);
-  const fxRateDate = paymentDate || localTodayIsoDate();
+  const fxRateDate = String(formData.get("fx_rate_date") || "") || new Date().toISOString().slice(0, 10);
 
   if (!title) throw new Error("Expense is required");
   if (!paymentDate) throw new Error("Payment date is required");
@@ -3268,9 +3083,6 @@ async function savePaymentFromForm(form) {
       id: paymentId,
       household_id: state.householdId,
       title,
-      amount,
-      currency_code: currencyCode,
-      fx_rate_to_gbp: fxRateToGbp,
       amount_gbp: amountGbp,
       payment_date: paymentDate,
       category_key: categoryKey,
@@ -3324,9 +3136,6 @@ async function savePaymentFromForm(form) {
       id: payment.id,
       household_id: state.householdId,
       title,
-      amount,
-      currency_code: currencyCode,
-      fx_rate_to_gbp: fxRateToGbp,
       amount_gbp: amountGbp,
       payment_date: paymentDate,
       category_key: categoryKey,
