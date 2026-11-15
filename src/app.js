@@ -2300,10 +2300,22 @@ function renderPayments(payments, payerLabels, paymentDetails = new Map(), hypot
     toggleLabel?.classList.add("hidden");
   }
 
-  const combined = [
+  const searchTerm = (document.getElementById("payments-search")?.value || "").trim().toLowerCase();
+
+  let combined = [
     ...(showProjected ? (hypotheticalRows || []).slice(0, 100) : []),
     ...(payments || []).slice(0, 200)
   ];
+
+  if (searchTerm) {
+    combined = combined.filter((p) => {
+      const title = (p.title || "").toLowerCase();
+      const payer = (p.is_hypothetical
+        ? (p.hypothetical_payer_name || "")
+        : (payerLabels?.get(p.id) || "")).toLowerCase();
+      return title.includes(searchTerm) || payer.includes(searchTerm);
+    });
+  }
 
   if (!combined.length) {
     target.textContent = "No payments yet.";
@@ -3352,6 +3364,13 @@ async function bootstrap() {
       localStorage.setItem("finance.showProjected", showProjectedCheckbox.checked);
       const loadedPayments = state.loadedPayments.slice();
       renderPayments(loadedPayments, state.lastPayerLabels, state.lastPaymentDetails, state.lastHypotheticalRows);
+    });
+  }
+
+  const searchInput = document.getElementById("payments-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      renderPayments(state.loadedPayments.slice(), state.lastPayerLabels, state.lastPaymentDetails, state.lastHypotheticalRows);
     });
   }
 
