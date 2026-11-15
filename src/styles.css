@@ -199,6 +199,29 @@ button.primary {
   background: var(--hypo-bg) !important;
 }
 
+.payments-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.payments-search {
+  flex: 1;
+  min-width: 140px;
+  padding: 6px 10px;
+  font-size: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.payments-search::placeholder {
+  color: var(--muted);
+}
+
 .toggle-label {
   font-size: 13px;
   color: var(--muted);
@@ -207,6 +230,7 @@ button.primary {
   align-items: center;
   gap: 6px;
   margin-bottom: 8px;
+  white-space: nowrap;
 }
 
 

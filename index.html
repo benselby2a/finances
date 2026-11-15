@@ -60,10 +60,13 @@
 
       <section class="card" style="margin-bottom:12px">
         <h2 style="margin-top:0">Payments</h2>
-        <label id="show-projected-toggle" class="toggle-label hidden">
-          <input type="checkbox" id="show-projected" checked />
-          Show projected payments
-        </label>
+        <div class="payments-toolbar">
+          <input type="search" id="payments-search" class="payments-search" placeholder="Search expenses…" />
+          <label id="show-projected-toggle" class="toggle-label hidden" style="margin-bottom:0">
+            <input type="checkbox" id="show-projected" checked />
+            Show projected
+          </label>
+        </div>
         <div id="payments-list">No payments yet.</div>
         <div style="margin-top:8px; display:flex; justify-content:center">
           <button id="load-more-payments" type="button" class="hidden" style="width:100%; max-width:400px">Show Settled Expenses</button>
