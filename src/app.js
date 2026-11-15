@@ -2090,7 +2090,7 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     .order("created_at", { ascending: false });
   const cutoff = state.latestSettlementDate || defaultFromDate;
   if (!state.showSettledItems && cutoff) {
-    query = query.gte("payment_date", cutoff);
+    query = query.gt("payment_date", cutoff);
   }
   if (!reset && state.paymentsCursorPaymentDate) {
     query = query.or(`payment_date.lt.${state.paymentsCursorPaymentDate},and(payment_date.eq.${state.paymentsCursorPaymentDate},created_at.lt.${state.paymentsCursorCreatedAt})`);
@@ -2111,7 +2111,7 @@ async function fetchPaymentsPage({ reset = false } = {}) {
       .select("id", { count: "exact", head: true })
       .eq("household_id", state.householdId)
       .is("deleted_at", null)
-      .lt("payment_date", cutoff);
+      .lte("payment_date", cutoff);
     if (olderCountError) throw olderCountError;
     state.paymentsHasMore = Number(count || 0) > 0 || rows.length === state.paymentsPageSize;
   } else {
