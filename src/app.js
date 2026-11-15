@@ -1968,21 +1968,35 @@ function memberNameByUserId(userId) {
 async function loadDashboardData() {
   let payments = await fetchPaymentsPage({ reset: true });
 
-  // Fallback: if no rows for the current household context, detect a household that has data.
+  // Fallback: if the current household has no payment data at all, detect a
+  // household that does. An empty default *view* isn't enough signal by
+  // itself - once nothing is newer than the latest settlement, the
+  // settlement-filtered view is legitimately empty, so check unfiltered
+  // existence for the current household first.
   if (!payments.length) {
-    const { data: anyPayments, error: anyPaymentsError } = await state.supabase
+    const { count: currentHouseholdCount, error: currentHouseholdError } = await state.supabase
       .schema("finance_app")
       .from("payments")
-      .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
-      .is("deleted_at", null)
-      .order("payment_date", { ascending: false })
-      .limit(1);
-    if (anyPaymentsError) throw anyPaymentsError;
-    if (anyPayments && anyPayments.length) {
-      state.householdId = anyPayments[0].household_id;
-      await loadMembers();
-      payments = await fetchPaymentsPage({ reset: true });
-      showToast("Switched to household with existing payment history.");
+      .select("id", { count: "exact", head: true })
+      .eq("household_id", state.householdId)
+      .is("deleted_at", null);
+    if (currentHouseholdError) throw currentHouseholdError;
+
+    if (!currentHouseholdCount) {
+      const { data: anyPayments, error: anyPaymentsError } = await state.supabase
+        .schema("finance_app")
+        .from("payments")
+        .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id")
+        .is("deleted_at", null)
+        .order("payment_date", { ascending: false })
+        .limit(1);
+      if (anyPaymentsError) throw anyPaymentsError;
+      if (anyPayments && anyPayments.length) {
+        state.householdId = anyPayments[0].household_id;
+        await loadMembers();
+        payments = await fetchPaymentsPage({ reset: true });
+        showToast("Switched to household with existing payment history.");
+      }
     }
   }
 
