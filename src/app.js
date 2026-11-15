@@ -2088,14 +2088,18 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
     .order("created_at", { ascending: false });
-  const cutoff = state.latestSettlementDate || defaultFromDate;
+  const searchTerm = (document.getElementById("payments-search")?.value || "").trim().replace(/[%_,()*\\]/g, " ").trim();
+  if (searchTerm) {
+    query = query.ilike("title", `%${searchTerm}%`);
+  }
+  const cutoff = searchTerm ? null : (state.latestSettlementDate || defaultFromDate);
   if (!state.showSettledItems && cutoff) {
     query = query.gte("payment_date", cutoff);
   }
   if (!reset && state.paymentsCursorPaymentDate) {
     query = query.or(`payment_date.lt.${state.paymentsCursorPaymentDate},and(payment_date.eq.${state.paymentsCursorPaymentDate},created_at.lt.${state.paymentsCursorCreatedAt})`);
   }
-  const { data, error } = await query.limit(state.paymentsPageSize);
+  const { data, error } = await query.limit(searchTerm ? 200 : state.paymentsPageSize);
   if (error) throw error;
 
   const rows = data || [];
@@ -2115,7 +2119,7 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     if (olderCountError) throw olderCountError;
     state.paymentsHasMore = Number(count || 0) > 0 || rows.length === state.paymentsPageSize;
   } else {
-    state.paymentsHasMore = rows.length === state.paymentsPageSize;
+    state.paymentsHasMore = !searchTerm && rows.length === state.paymentsPageSize;
   }
   state.loadedPayments = reset ? rows.slice() : state.loadedPayments.concat(rows);
   return rows;
@@ -3369,8 +3373,10 @@ async function bootstrap() {
 
   const searchInput = document.getElementById("payments-search");
   if (searchInput) {
+    let searchTimer = null;
     searchInput.addEventListener("input", () => {
-      renderPayments(state.loadedPayments.slice(), state.lastPayerLabels, state.lastPaymentDetails, state.lastHypotheticalRows);
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => scheduleDashboardRefresh(), 150);
     });
   }
 
