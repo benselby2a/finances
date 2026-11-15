@@ -904,6 +904,44 @@ menu {
     padding: 8px 10px;
   }
 
+  /* Recurring table uses its own set of column labels (Name/Frequency/
+     Start/End), which don't match the Payments table's labels above, so
+     those cells fell through to grid auto-placement and landed in the
+     same row as Actions, overlapping its buttons. Give it an explicit
+     layout keyed to its own labels instead. */
+  #recurring-list .payments-table tbody tr {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "name frequency amount"
+      "start end end"
+      "actions actions actions";
+  }
+
+  #recurring-list .payments-table tbody td[data-label="Name"] {
+    grid-area: name;
+  }
+
+  #recurring-list .payments-table tbody td[data-label="Frequency"] {
+    grid-area: frequency;
+  }
+
+  #recurring-list .payments-table tbody td[data-label="Amount"] {
+    grid-area: amount;
+  }
+
+  #recurring-list .payments-table tbody td[data-label="Start"] {
+    grid-area: start;
+  }
+
+  #recurring-list .payments-table tbody td[data-label="End"] {
+    grid-area: end;
+  }
+
+  #recurring-list .payments-table tbody td[data-label="Actions"] {
+    grid-area: actions;
+    padding-top: 4px;
+  }
+
   .payment-meta-line,
   .payment-result-line {
     margin-top: 1px;
