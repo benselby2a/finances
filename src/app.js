@@ -2088,18 +2088,14 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     .is("deleted_at", null)
     .order("payment_date", { ascending: false })
     .order("created_at", { ascending: false });
-  const searchTerm = (document.getElementById("payments-search")?.value || "").trim().replace(/[%_,()*\\]/g, " ").trim();
-  if (searchTerm) {
-    query = query.ilike("title", `%${searchTerm}%`);
-  }
-  const cutoff = searchTerm ? null : (state.latestSettlementDate || defaultFromDate);
+  const cutoff = state.latestSettlementDate || defaultFromDate;
   if (!state.showSettledItems && cutoff) {
     query = query.gte("payment_date", cutoff);
   }
   if (!reset && state.paymentsCursorPaymentDate) {
     query = query.or(`payment_date.lt.${state.paymentsCursorPaymentDate},and(payment_date.eq.${state.paymentsCursorPaymentDate},created_at.lt.${state.paymentsCursorCreatedAt})`);
   }
-  const { data, error } = await query.limit(searchTerm ? 200 : state.paymentsPageSize);
+  const { data, error } = await query.limit(state.paymentsPageSize);
   if (error) throw error;
 
   const rows = data || [];
@@ -2119,10 +2115,42 @@ async function fetchPaymentsPage({ reset = false } = {}) {
     if (olderCountError) throw olderCountError;
     state.paymentsHasMore = Number(count || 0) > 0 || rows.length === state.paymentsPageSize;
   } else {
-    state.paymentsHasMore = !searchTerm && rows.length === state.paymentsPageSize;
+    state.paymentsHasMore = rows.length === state.paymentsPageSize;
   }
   state.loadedPayments = reset ? rows.slice() : state.loadedPayments.concat(rows);
   return rows;
+}
+
+let paymentsSearchSeq = 0;
+async function runPaymentsSearch() {
+  const term = (document.getElementById("payments-search")?.value || "").trim().replace(/[%_,()*\\]/g, " ").trim();
+  const seq = ++paymentsSearchSeq;
+  if (!term) {
+    scheduleDashboardRefresh();
+    return;
+  }
+  try {
+    const { data, error } = await state.supabase
+      .schema("finance_app")
+      .from("payments")
+      .select("id, household_id, title, amount_gbp, payment_date, category_key, source_type, created_by, generated_by_recurring_template_id, created_at")
+      .eq("household_id", state.householdId)
+      .is("deleted_at", null)
+      .ilike("title", `%${term}%`)
+      .order("payment_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    if (seq !== paymentsSearchSeq) return;
+    const rows = data || [];
+    const meta = await buildPaymentMeta(rows).catch(() => ({ payerLabels: new Map(), paymentDetails: new Map() }));
+    if (seq !== paymentsSearchSeq) return;
+    document.getElementById("load-more-payments")?.classList.add("hidden");
+    renderPayments(rows, meta.payerLabels, meta.paymentDetails, state.lastHypotheticalRows);
+  } catch (error) {
+    console.error("Search failed:", error);
+    showToast(`Search failed: ${formatError(error)}`);
+  }
 }
 
 async function fetchLoadedPayments() {
@@ -3376,7 +3404,7 @@ async function bootstrap() {
     let searchTimer = null;
     searchInput.addEventListener("input", () => {
       clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => scheduleDashboardRefresh(), 150);
+      searchTimer = setTimeout(runPaymentsSearch, 150);
     });
   }
 
