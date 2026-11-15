@@ -214,8 +214,8 @@ button.primary {
   font-size: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm, 6px);
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--card);
+  color: var(--text);
 }
 
 .payments-search::placeholder {
