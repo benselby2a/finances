@@ -2591,7 +2591,7 @@ async function renderRecurringSection() {
     .select("id, title, amount, frequency, start_date, end_date, status")
     .eq("household_id", state.householdId)
     .order("created_at", { ascending: false })
-    .limit(20);
+    .limit(200);
   if (error) {
     target.textContent = `Failed to load recurring: ${formatError(error)}`;
     return;
