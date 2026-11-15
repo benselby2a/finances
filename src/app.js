@@ -2139,7 +2139,7 @@ async function runPaymentsSearch() {
       .ilike("title", `%${term}%`)
       .order("payment_date", { ascending: false })
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(20);
     if (error) throw error;
     if (seq !== paymentsSearchSeq) return;
     const rows = data || [];
@@ -2591,7 +2591,7 @@ async function renderRecurringSection() {
     .select("id, title, amount, frequency, start_date, end_date, status")
     .eq("household_id", state.householdId)
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(20);
   if (error) {
     target.textContent = `Failed to load recurring: ${formatError(error)}`;
     return;
@@ -3404,7 +3404,7 @@ async function bootstrap() {
     let searchTimer = null;
     searchInput.addEventListener("input", () => {
       clearTimeout(searchTimer);
-      searchTimer = setTimeout(runPaymentsSearch, 150);
+      searchTimer = setTimeout(runPaymentsSearch, 250);
     });
   }
 
